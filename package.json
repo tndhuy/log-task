@@ -1,0 +1,14 @@
+{
+  "name": "log-task",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Personal skill: log completed work into a project's declared platform (eoffice, lark, or manual).",
+  "scripts": {
+    "test": "node --test scripts/**/*.test.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "playwright": "^1.47.0"
+  }
+}
