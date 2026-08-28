@@ -1,0 +1,10 @@
+{
+  "/absolute/path/to/your/project": {
+    "platform": "eoffice | lark | manual",
+    "gitEmails": ["you@example.com"],
+    "params": {
+      "// eoffice params": "defaultAssignor, defaultAssignee, defaultFollower, defaultCollaborator (visible names)",
+      "// lark params": "baseToken, tableId, prefix, fieldMap (see references/lark.md)"
+    }
+  }
+}
