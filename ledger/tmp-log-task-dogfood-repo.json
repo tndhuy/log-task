@@ -1,0 +1,22 @@
+[
+  {
+    "fingerprint": "03c8abfd8245bb0b701df093b773878a0a6ae1ac",
+    "taskName": "[BE] Add login handler with token refresh",
+    "loggedAt": "2026-08-28T00:00:00Z",
+    "platform": "manual",
+    "evidenceCommits": [
+      "5bb9103760f237f43c6832fde5d19ed23141dd12",
+      "de114c67087cb5531eb32188c3c37b678ef5b6b5"
+    ]
+  },
+  {
+    "fingerprint": "fdcc80e522c42935b1a2ec7633be894cbd12aeba",
+    "taskName": "[BE] Stream CSV export and fix null-row crash",
+    "loggedAt": "2026-08-28T00:00:00Z",
+    "platform": "manual",
+    "evidenceCommits": [
+      "4b2362d2e6f8dc2e03deb6759c8c4ea2da0a9739",
+      "cd42214a025f621688c37529f7dfaefdd845b693"
+    ]
+  }
+]
