@@ -6,6 +6,8 @@ import {
   chromiumEpochToUnix,
   mapSameSite,
   toPlaywrightCookie,
+  validateProfile,
+  decryptRows,
 } from './cookie-import.mjs';
 
 function encryptForFixture(plainValue, key) {
@@ -67,4 +69,44 @@ test('toPlaywrightCookie builds a complete Playwright cookie object', () => {
     name: 'session', value: 'abc123', domain: 'eoffice.novagroup.vn', path: '/',
     expires: -1, secure: true, httpOnly: true, sameSite: 'Lax',
   });
+});
+
+test('validateProfile rejects path separators and traversal', () => {
+  assert.throws(() => validateProfile('../etc/passwd'), /Invalid profile/);
+  assert.throws(() => validateProfile('a/b'), /Invalid profile/);
+  assert.throws(() => validateProfile('a\\b'), /Invalid profile/);
+});
+
+test('validateProfile rejects control characters', () => {
+  assert.throws(() => validateProfile('Default\x00'), /Invalid profile/);
+});
+
+test('validateProfile accepts a normal profile name', () => {
+  assert.doesNotThrow(() => validateProfile('Default'));
+  assert.doesNotThrow(() => validateProfile('Profile 1'));
+});
+
+test('decryptRows skips a row with a per-row decrypt failure but keeps going', () => {
+  const goodRow = {
+    name: 'a', host_key: 'x.test', path: '/', expires_utc: 0n, has_expires: 0,
+    is_secure: 1, is_httponly: 1, samesite: 1, value: 'plain', encrypted_value: Buffer.alloc(0),
+  };
+  const badRow = {
+    name: 'b', host_key: 'x.test', path: '/', expires_utc: 0n, has_expires: 0,
+    is_secure: 1, is_httponly: 1, samesite: 1, value: '',
+    encrypted_value: Buffer.concat([Buffer.from('v11'), Buffer.alloc(10)]), // no v11 key below
+  };
+  const result = decryptRows([goodRow, badRow], new Map());
+  assert.equal(result.count, 1);
+  assert.equal(result.failed, 1);
+  assert.equal(result.cookies[0].name, 'a');
+});
+
+test('decryptRows propagates a v20 (unsupported encoding) error instead of swallowing it', () => {
+  const v20Row = {
+    name: 'a', host_key: 'x.test', path: '/', expires_utc: 0n, has_expires: 0,
+    is_secure: 1, is_httponly: 1, samesite: 1, value: '',
+    encrypted_value: Buffer.concat([Buffer.from('v20'), Buffer.alloc(10)]),
+  };
+  assert.throws(() => decryptRows([v20Row], new Map()), /not supported/);
 });

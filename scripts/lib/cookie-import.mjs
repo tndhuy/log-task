@@ -69,7 +69,14 @@ function getBaseDir(platform) {
   return path.join(os.homedir(), '.config');
 }
 
+export function validateProfile(profile) {
+  if (/[/\\]|\.\./.test(profile) || /[\x00-\x1f]/.test(profile)) {
+    throw new CookieImportError(`Invalid profile name: '${profile}'`, 'bad_request');
+  }
+}
+
 function getCookieDbPath(profile) {
+  validateProfile(profile);
   const platform = getHostPlatform();
   const dataDir = platform === 'darwin' ? CHROME.darwinDataDir : CHROME.linuxDataDir;
   const dbPath = path.join(getBaseDir(platform), dataDir, profile, 'Cookies');
@@ -222,6 +229,28 @@ function chromiumNow() {
   return BigInt(Date.now()) * 1000n + CHROMIUM_EPOCH_OFFSET;
 }
 
+export function decryptRows(rows, keys) {
+  const cookies = [];
+  let failed = 0;
+  for (const row of rows) {
+    try {
+      const value = decryptCookieValue(row, keys);
+      cookies.push(toPlaywrightCookie(row, value));
+    } catch (err) {
+      // A per-row decrypt failure (corrupt value, mismatched key) is
+      // recoverable -- skip that row and keep going. An unsupported
+      // encoding is a browser-wide condition, not a per-row one: let it
+      // propagate so the caller can react (see references/eoffice.md /
+      // DESIGN.md -- never silently return wrong/empty data for this case).
+      if (err instanceof CookieImportError && err.code === 'v20_encryption') {
+        throw err;
+      }
+      failed++;
+    }
+  }
+  return { cookies, count: cookies.length, failed };
+}
+
 export function importCookies(domains, profile = 'Default') {
   if (domains.length === 0) return { cookies: [], count: 0, failed: 0 };
   const { dbPath, platform } = getCookieDbPath(profile);
@@ -238,17 +267,7 @@ export function importCookies(domains, profile = 'Default') {
          AND (has_expires = 0 OR expires_utc > ?)
        ORDER BY host_key, name`
     ).all(...domains, now);
-    const cookies = [];
-    let failed = 0;
-    for (const row of rows) {
-      try {
-        const value = decryptCookieValue(row, keys);
-        cookies.push(toPlaywrightCookie(row, value));
-      } catch {
-        failed++;
-      }
-    }
-    return { cookies, count: cookies.length, failed };
+    return decryptRows(rows, keys);
   } finally {
     db.close();
   }
