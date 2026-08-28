@@ -38,17 +38,29 @@ Reuse this exact path in Step 7 -- don't recompute it differently there.
 Ask the user for the date window if not already given (e.g. "log everything
 since my last run" or an explicit range).
 
-**Git commits**, run inside the project root, once per configured email,
-unioning results by commit hash (checking BOTH author and committer date
-catches rebased/cherry-picked commits the other check would miss):
+**Git commits**, run inside the project root, once per configured email.
+`--since`/`--until` filter by COMMITTER date ONLY, regardless of whether you
+also pass `--author` or `--committer` -- they do NOT implement an
+author-date check, and a commit authored inside the window but rebased or
+re-committed later (committer date now outside the window) would otherwise
+be silently invisible. So: widen `--since` by ~14 days as a coarse
+pre-filter purely to keep the output small, then do the real window check
+yourself, client-side, on both dates:
 
-    git log --all --since="<window-start>" --until="<window-end>" \
+    git log --all --since="<window-start minus 14 days>" --until="<window-end>" \
       --author="<email>" --date=iso-strict \
-      --pretty=format:'%H|%ad|%an|%s'
+      --pretty=format:'%H|%ad|%cd|%an|%s'
 
-    git log --all --since="<window-start>" --until="<window-end>" \
+    git log --all --since="<window-start minus 14 days>" --until="<window-end>" \
       --committer="<email>" --date=iso-strict \
-      --pretty=format:'%H|%cd|%cn|%s'
+      --pretty=format:'%H|%ad|%cd|%an|%s'
+
+Union the two passes by commit hash (dedupe), then, from that combined set,
+keep ONLY commits where the author date (`%ad`) OR the committer date
+(`%cd`) falls within the REAL requested window
+(`<window-start>`..`<window-end>`). This client-side OR-check -- not the
+`--since`/`--until` flags -- is what actually implements "checking both
+dates," and is what catches the rebase/cherry-pick case.
 
 **Claude prompt history**, filtered to this project and window:
 
@@ -85,13 +97,25 @@ squashed or partially cherry-picked evidence set should still match):
     echo -n "<project-key>|<normalized-task-name>|<sorted-comma-joined-commit-hashes>" | shasum -a 1 | cut -d' ' -f1
 
 Drop any candidate where EITHER:
-- its fingerprint already appears in the loaded ledger, OR
-- every one of its backing commit hashes already appears in some ledgered
-  entry's `evidenceCommits` array (this still catches a match even if the
-  synthesized name drifted between runs).
+- its fingerprint already appears in the loaded ledger (**fingerprint
+  match**), OR
+- ALL of its backing commit hashes are found within a SINGLE existing
+  ledger entry's `evidenceCommits` array -- i.e. one ledger entry's
+  `evidenceCommits` is a superset of this candidate's commit set
+  (**commit-subset match**; this still catches a match even if the
+  synthesized name drifted between runs). Do NOT drop a candidate whose
+  commits are merely scattered across the `evidenceCommits` of *multiple*
+  different ledger entries -- that's a genuinely new cross-cutting task, not
+  a duplicate, since one commit can legitimately back more than one logged
+  task.
 
-If nothing is left, report "nothing new to log" and stop -- never produce an
-empty draft.
+List every dropped candidate in your working notes together with which rule
+dropped it (fingerprint match vs. commit-subset match, and which ledger
+entry/fingerprint it matched) -- never drop one silently. If, after this
+pass, no candidates remain, report "nothing new to log" (including the
+dropped-candidate list, mirroring nova's own task-log convention of an
+explicit "excluded because already logged" section) and stop -- never
+produce an empty draft.
 
 ## Step 5: Format the draft
 
