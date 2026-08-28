@@ -80,6 +80,28 @@ declares exactly one in `projects.json`:
   interactive headed-browser login — if the user is already logged into
   eOffice in their everyday browser, `log-task` just reuses that, with
   no separate login step at all.
+
+  **Real eOffice workflow (confirmed against a separate Codex-built
+  reference recording of the actual UI, `nova-work-log-deliverable.zip`,
+  analyzed 2026-08-28):** logging a task in eOffice is **two independent
+  actions, not one form** — (1) create the task (Project → Tasks → Add
+  task → fill fields → submit), then (2) separately open that task and
+  submit a progress report marking it done. Each gets its own
+  `--dry-run` preview and its own explicit confirmation (see Data Flow
+  Step 7) — treating them as one write with one confirmation would be
+  wrong, since they're genuinely separate, independently-confirmable
+  actions on the real system. Every task also requires **assignor,
+  assignee, follower, and collaborator** fields (people, not free text)
+  — if any can't be confidently resolved from `projects.json`'s `params`,
+  stop and ask; never guess or default silently. Success after the
+  report-progress submit is confirmed by reading back a specific visible
+  state (progress `100%` and status `Evaluating`), which validates our
+  `successSignal` design as-is. Field discovery (Task 5) targets
+  Playwright's semantic locators (`getByRole`, `getByLabel`, `getByText`)
+  rather than raw CSS selectors — the reference recording's one hard
+  lesson from actually building this ("target visible labels, not screen
+  coordinates") ports directly onto Playwright's own locator API without
+  needing a vision/Computer-Use dependency.
 - **`lark`** — writes via the `lark-cli` Open API (dry-run, then real
   write), as already used successfully for dominode's Sprint 4 milestones.
   `lark-cli` is an external binary the user installs themselves, same as
@@ -109,6 +131,18 @@ declares exactly one in `projects.json`:
   module already covers (Chrome/Chromium-family on macOS/Linux/Windows).
   Firefox/Safari cookie stores are a different format — out of scope
   unless actually needed.
+- No multi-repo/workspace scanning. A separate reference implementation
+  (`nova-work-log-deliverable.zip`, analyzed 2026-08-28) discovers and
+  logs across multiple repos under one root; considered and explicitly
+  deferred here — `/log-task` still resolves exactly one project from
+  `cwd` per invocation. Real feature, but a scope expansion beyond what's
+  broken today; revisit only if actually needed, not because a reference
+  tool happens to have it.
+- No exclusion of merge commits from evidence. The same reference
+  implementation drops `--no-merges`; we deliberately keep merges as
+  milestone/status markers (e.g. "Status: Merged" — see the live
+  `investment-report-backend` demo run, 2026-08-28), which is more
+  informative for this tool's purpose than treating them as pure noise.
 
 ## Architecture
 
@@ -160,11 +194,30 @@ to the one place it's unavoidable.
   session already exists in the user's real Chrome.
 - `~/.claude/skills/log-task/scripts/eoffice-write.mjs` — bundled Node +
   Playwright script. Loads `.eoffice-session.json` as Playwright
-  `storageState`, navigates to the task-entry form, and either prints the
-  planned fill actions (`--dry-run`) or fills + submits + re-reads the
-  page per task to confirm it now appears. Exits with a distinct code for
-  "no session" / "session expired" so `SKILL.md` can react instead of
-  guessing.
+  `storageState`. Has two modes, matching eOffice's real two-action
+  workflow: `create-task` (Project → Tasks → Add task → fill fields →
+  submit) and `report-progress` (open the task by title → Report → Task
+  progress report → enter date + `100` + description → submit). Each mode
+  supports `--dry-run` independently and is called with its own separate
+  confirmation gate (see Data Flow Step 7) — never chained without a user
+  check in between. Fields are targeted via Playwright's semantic locators
+  (`getByRole`/`getByLabel`/`getByText`), not raw CSS selectors — a real
+  lesson from an existing reference automation of this same eOffice UI, to
+  avoid brittle coordinate/selector-based automation. Re-reads the page
+  after each submit to confirm success (`create-task`: task now appears;
+  `report-progress`: progress reads `100%` and status reads `Evaluating`).
+  Exits with a distinct code for "no session" / "session expired" so
+  `SKILL.md` can react instead of guessing.
+- `~/.claude/skills/log-task/references/eoffice-form-map.json` (produced
+  by Task 5's discovery pass, not authored ahead of time) — two field
+  maps, one per `eoffice-write.mjs` mode. Beyond the obvious task fields
+  (name, dates, description), both eOffice forms require **people
+  fields**: `assignor`, `assignee`, `follower`, `collaborator`. These
+  resolve from `projects.json`'s `params` (e.g. `params.defaultAssignee`,
+  `params.defaultFollower`) — if a project hasn't configured a needed
+  default and the evidence doesn't make it unambiguous, `eoffice-write.mjs`
+  must stop and ask rather than guess or silently default. Never invent a
+  person.
 - `~/.claude/skills/log-task/package.json` — declares the `playwright`
   and `better-sqlite3` dependencies; `references/eoffice.md` documents the
   one-time setup (`npm install && npx playwright install chromium`) and
@@ -210,19 +263,37 @@ to the one place it's unavoidable.
 7. On approval, run the platform's write procedure:
    - **eoffice**: if `.eoffice-session.json` is missing or stale, run
      `node scripts/eoffice-session.mjs` first to (re-)import the cookie
-     from the user's real Chrome. Then run
-     `node scripts/eoffice-write.mjs --dry-run`, show the planned actions,
-     get a second confirmation, then run it for real; if it exits with the
-     "no session"/"session expired" code, tell the user to log into
-     `eoffice.novagroup.vn` in Chrome, re-run `eoffice-session.mjs`, and
-     retry. On success, append entries to the ledger (with an `externalId`
-     only if the confirmation page exposes one).
+     from the user's real Chrome. eOffice's real workflow is two
+     independent actions — do NOT collapse them into one confirmation:
+     1. **Create task**: skip any candidate whose Status isn't clearly
+        "Done" (a "Partial"/"Investigation completed" task has nothing to
+        mark 100% yet — report-progress is for finished work only, not a
+        stage-gate for everything). For the rest, run
+        `node scripts/eoffice-write.mjs create-task --dry-run`, show the
+        planned actions, get an explicit confirmation, then run it for
+        real. If any people field (assignor/assignee/follower/collaborator)
+        can't be resolved, stop and ask before even reaching dry-run.
+     2. **Report progress**: for each task just created (or already
+        existing and now complete), run
+        `node scripts/eoffice-write.mjs report-progress --dry-run`, show
+        the planned actions, get a **separate** explicit confirmation,
+        then run it for real.
+     If either mode exits with the "no session"/"session expired" code,
+     tell the user to log into `eoffice.novagroup.vn` in Chrome, re-run
+     `eoffice-session.mjs`, and retry. On success, append entries to the
+     ledger (with an `externalId` only if the confirmation page exposes
+     one) only after **both** steps succeed for a given task — a task
+     that's created but not yet reported isn't fully logged.
    - **lark**: run `lark-cli base +record-upsert --dry-run` (or
      `+record-batch-create --dry-run` for multiple), show the preview,
      get a second explicit confirmation, run for real, then append
      entries to the ledger with the returned record IDs.
    - **manual**: save the draft file, remind the user where to log it
      themselves, append entries to the ledger (no `externalId`).
+   - **All platforms**: write the ledger back via a temp file + rename
+     (write to `ledger/<key>.json.tmp`, then rename over the real path),
+     not a direct in-place write — cheap, avoids a truncated/corrupt
+     ledger file if the process is interrupted mid-write.
 
 ## Error Handling
 
@@ -265,7 +336,12 @@ against real data. `eoffice` has an actual script, so it gets both:
 - For `eoffice-write.mjs`: run once headed (visible browser) against a
   single, low-stakes task and watch the submission happen before ever
   trusting a headless or multi-task run; verify the entry appears
-  correctly on the eOffice task list afterward.
+  correctly on the eOffice task list afterward. Test `create-task` and
+  `report-progress` as separate runs, not just chained together, since
+  they're independently-confirmed steps in real use — confirm each mode's
+  own success signal (task appears; progress `100%` + status
+  `Evaluating`) rather than assuming the second worked because the first
+  did.
 - For `cookie-import.mjs`: verify against the real Chrome profile that it
   actually recovers a valid, currently-working `eoffice.novagroup.vn`
   session before wiring it into `eoffice-write.mjs` — test the ported
@@ -273,27 +349,20 @@ against real data. `eoffice` has an actual script, so it gets both:
 
 ## Open Items for Implementation
 
-- Exact git log invocation (date window parameterization, author vs
-  committer date reconciliation logic) needs to match what was done by
-  hand for nova — pull the precise `git log` flags used when that file was
-  built, if recoverable, rather than reinventing them.
-- `projects.json` needs its first two real entries (nova → eoffice,
-  happyland-of-draken/dominode → lark) with real `params` filled in
-  (base_token, table_id, gitEmails) before this is usable.
-- Porting `cookie-import-browser.ts` → `cookie-import.mjs`: swap
-  `bun:sqlite` for `better-sqlite3`, drop the one-line `TEMP_DIR` import
-  (inline the two-line platform check instead of vendoring `platform.ts`
-  for one constant), and keep the file's original MIT license header plus
-  an attribution comment noting it's ported from gstack's
-  `browse/src/cookie-import-browser.ts` — required by the MIT license's
-  "include the copyright notice" term, and useful so a future reader knows
-  where to diff against if gstack fixes a decryption bug upstream.
-- eOffice's task-entry form has never been driven programmatically before
-  (prior work only proved login/cookie auth via a different tool, gstack,
-  not writing) — `eoffice-write.mjs` needs a discovery pass against the
-  real form (field names, required fields, submit confirmation signal)
-  before it can be written precisely; this belongs in the implementation
-  plan as its own investigation step, not guessed at here.
-- Decide `.eoffice-session.json`'s exact location and confirm it's
-  gitignored if this skill is ever published from a git-tracked directory
-  — it holds a live authenticated session and must never be committed.
+Resolved during implementation (kept here only as a pointer, not re-litigated): git log's author/committer/date handling (Task 8, two fix rounds — see the SDD ledger); `cookie-import-browser.ts` → `cookie-import.mjs` porting (Task 2, one fix round); `.eoffice-session.json` location and gitignore (Task 1, confirmed).
+
+- `projects.json`'s `happyland-of-draken/dominode → lark` entry is done and
+  verified against the live Lark base (Task 9). The `nova → eoffice` entry
+  is still pending — now unblocked by the real-workflow info below, but
+  not yet wired.
+- eOffice's task-entry form has never been driven programmatically by
+  *this* codebase, but a real-workflow reference is now available (a
+  separate Codex-built recording of the actual UI,
+  `nova-work-log-deliverable.zip`, analyzed 2026-08-28 — see the two new
+  paragraphs under Platforms/`eoffice` and Components/`eoffice-write.mjs`
+  above for what it revealed: two-step create-then-report workflow,
+  required people fields, semantic-locator strategy, the `100%`/
+  `Evaluating` success signal). Task 5's discovery pass still needs to run
+  against the real, live eOffice UI to produce concrete selectors/labels
+  for *this* user's actual eOffice instance — the reference only tells us
+  the shape of the workflow, not this instance's exact field labels/URLs.

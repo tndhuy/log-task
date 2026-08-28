@@ -4,7 +4,7 @@
 
 **Goal:** Build the `log-task` Claude Code skill at `~/.claude/skills/log-task/` — a manually-invoked (`/log-task`) tool that gathers evidence of completed work (git commits, Claude history, checkpoint notes), dedupes it against a per-project ledger, drafts it in a platform-specific shape, and — after explicit approval — writes it to that project's declared platform (`eoffice`, `lark`, or `manual`).
 
-**Architecture:** Mostly instruction-driven (`SKILL.md` + `references/*.md`) for the shared pipeline and for `lark`/`manual`. `eoffice` is the one platform needing real code: a ported, Node-compatible copy of gstack's MIT-licensed Chrome cookie-import logic, a thin session-capture wrapper, and a Playwright script that fills/submits eOffice's task-entry form using a data-driven field map (populated during a discovery task, not guessed).
+**Architecture:** Mostly instruction-driven (`SKILL.md` + `references/*.md`) for the shared pipeline and for `lark`/`manual`. `eoffice` is the one platform needing real code: a ported, Node-compatible copy of gstack's MIT-licensed Chrome cookie-import logic, a thin session-capture wrapper, and a Playwright script that fills/submits eOffice's two real actions -- create-task and report-progress, each independently confirmed -- using a data-driven, semantic-locator field map (populated during a discovery task, not guessed; revised 2026-08-28 against a real reference recording of the eOffice UI).
 
 **Tech Stack:** Node.js (`node:test`, `better-sqlite3`, `node:child_process`, `node:crypto`), `better-sqlite3` (npm), `playwright` (npm), `lark-cli` (external binary, not bundled), `git`, `jq`.
 
@@ -672,19 +672,42 @@ For each file, confirm:
 
 ---
 
-### Task 5: `references/eoffice-form-map.json` -- discover the real form
+### Task 5: `references/eoffice-form-map.json` -- discover the two real forms
+
+**Revised 2026-08-28** after the user supplied a separate Codex-built
+recording of the real eOffice UI (`nova-work-log-deliverable.zip`). Real
+eOffice task logging is **two separate screens reached by manual
+navigation, not one URL**: (1) Project -> Tasks -> Add task -> Add task
+(again, to open the form) -- creates the task; (2) open the task by title
+-> Report -> Task progress report -- marks it done. Neither screen has a
+stable, guessable URL, so this discovery pass is interactive: the human
+navigates, the script waits for a keypress, then dumps the visible form.
+Both forms also require **people fields** (assignor, assignee, follower,
+collaborator) that Task 6/7 will need to resolve from `projects.json`.
 
 **Files:**
-- Create: `~/.claude/skills/log-task/scripts/discover-eoffice-form.mjs` (discovery tool, kept for future re-discovery if eOffice's UI changes)
-- Create: `~/.claude/skills/log-task/references/eoffice-form-map.json` (output of running the discovery script)
+- Create: `~/.claude/skills/log-task/scripts/discover-eoffice-form.mjs`
+- Create: `~/.claude/skills/log-task/references/eoffice-form-map.json` (output)
 
 **Interfaces:**
 - Consumes: `.eoffice-session.json` (Task 3's output) as Playwright `storageState`.
-- Produces (used by Task 6): `eoffice-form-map.json` -- `{ "taskEntryUrl": string, "fields": { "<logicalName>": { "selector": string, "type": "text"|"select"|"date"|"textarea" } }, "submitSelector": string, "successSignal": { "selector": string, "matches": string } }`. This plan cannot specify the real values here -- that's this task's whole point -- but every later task consumes exactly this shape.
+- Produces (used by Task 6/7): `eoffice-form-map.json` --
+  ```json
+  {
+    "createTask": {
+      "navigation": "Project -> Tasks -> Add task -> Add task",
+      "fields": { "<logicalName>": { "locatorType": "label"|"role"|"text", "locatorValue": string, "role": string | null, "type": "text"|"select"|"date"|"textarea"|"person" } },
+      "submitLocator": { "locatorType": "role"|"label"|"text", "locatorValue": string, "role": string | null },
+      "successSignal": { "locatorType": "role"|"label"|"text", "locatorValue": string, "role": string | null, "matches": string }
+    },
+    "reportProgress": { "navigation": string, "fields": {...same shape...}, "submitLocator": {...}, "successSignal": {...} }
+  }
+  ```
+  `locatorType: "role"` pairs with Playwright's `getByRole(role, {name: locatorValue})`; `"label"` pairs with `getByLabel(locatorValue)`; `"text"` pairs with `getByText(locatorValue)`. Every later task builds real Playwright locators from this shape -- never a raw CSS selector string, per the real lesson from the reference recording ("target visible labels, not screen coordinates"). `type: "person"` fields (assignor/assignee/follower/collaborator) are filled by picking an option whose visible text matches a configured name, not typed as plain text.
 
-- [ ] **Step 1: Ask the user for the task-entry page URL**
+- [ ] **Step 1: Confirm with the user which two screens to discover**
 
-Before writing any code, ask the user: "What's the exact eOffice URL/page where you manually log a task (the page with the entry form), and roughly what fields does it have (task name, date, hours, project, etc.)?" Do not guess this -- it directly determines what the discovery script navigates to.
+Ask: "Confirm the real navigation path for (a) creating a task, and (b) reporting its progress -- is it exactly 'Project -> Tasks -> Add task -> Add task' and 'open the task -> Report -> Task progress report' as seen in your reference recording, or does your actual eOffice instance differ?" Do not assume the reference recording's path is identical to this user's live instance -- confirm before writing the navigation string into the form map.
 
 - [ ] **Step 2: Write `scripts/discover-eoffice-form.mjs`**
 
@@ -693,14 +716,15 @@ Before writing any code, ask the user: "What's the exact eOffice URL/page where 
 import { chromium } from 'playwright';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSION_PATH = path.join(__dirname, '..', '.eoffice-session.json');
-const TARGET_URL = process.argv[2];
+const MODE = process.argv[2]; // "create-task" | "report-progress"
 
-if (!TARGET_URL) {
-  console.error('Usage: node discover-eoffice-form.mjs <task-entry-url>');
+if (MODE !== 'create-task' && MODE !== 'report-progress') {
+  console.error('Usage: node discover-eoffice-form.mjs create-task|report-progress');
   process.exit(1);
 }
 if (!fs.existsSync(SESSION_PATH)) {
@@ -711,65 +735,97 @@ if (!fs.existsSync(SESSION_PATH)) {
 const browser = await chromium.launch({ headless: false });
 const context = await browser.newContext({ storageState: SESSION_PATH });
 const page = await context.newPage();
-await page.goto(TARGET_URL, { waitUntil: 'networkidle' });
+await page.goto('https://eoffice.novagroup.vn', { waitUntil: 'networkidle' });
 
-const elements = await page.$$eval('input, select, textarea, button', (els) =>
-  els.map((el) => ({
-    tag: el.tagName.toLowerCase(),
-    type: el.getAttribute('type'),
-    name: el.getAttribute('name'),
-    id: el.id || null,
-    ariaLabel: el.getAttribute('aria-label'),
-    placeholder: el.getAttribute('placeholder'),
-    text: el.tagName.toLowerCase() === 'button' ? el.textContent?.trim() : null,
-  }))
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+console.log(`\nNavigate manually to the ${MODE} screen in the opened browser.`);
+await rl.question('Press Enter here once the form is visible... ');
+rl.close();
+
+// Capture every labelled/interactive element: tag, role-relevant attributes,
+// and the text of any <label> associated with it (via for=id, or by
+// wrapping it) -- this is the raw material for choosing a getByRole/
+// getByLabel/getByText locator by hand in Step 3, not a CSS selector.
+const elements = await page.$$eval('input, select, textarea, button, [role]', (els) =>
+  els.map((el) => {
+    let labelText = null;
+    if (el.id) {
+      const forLabel = document.querySelector(`label[for="${el.id}"]`);
+      if (forLabel) labelText = forLabel.textContent?.trim();
+    }
+    if (!labelText) {
+      const wrappingLabel = el.closest('label');
+      if (wrappingLabel) labelText = wrappingLabel.textContent?.trim();
+    }
+    return {
+      tag: el.tagName.toLowerCase(),
+      role: el.getAttribute('role'),
+      type: el.getAttribute('type'),
+      name: el.getAttribute('name'),
+      id: el.id || null,
+      ariaLabel: el.getAttribute('aria-label'),
+      placeholder: el.getAttribute('placeholder'),
+      labelText,
+      text: el.tagName.toLowerCase() === 'button' ? el.textContent?.trim() : null,
+    };
+  })
 );
 
-console.log(JSON.stringify(elements, null, 2));
+console.log(JSON.stringify({ url: page.url(), elements }, null, 2));
 console.log('\nBrowser left open for manual inspection. Close it when done, then Ctrl+C.');
 await new Promise(() => {}); // keep the process alive so the user can inspect the page
 ```
 
-- [ ] **Step 3: Run it and inspect the output**
+- [ ] **Step 3: Run it for both screens and hand-write the form map**
 
-Run: `cd ~/.claude/skills/log-task && node scripts/discover-eoffice-form.mjs "<the URL from Step 1>"`
-Expected: a headed Chromium window opens on the task-entry page (already logged in via the imported session -- if it redirects to a login page instead, Task 3's session is stale; re-run `eoffice-session.mjs` and retry), and the terminal prints a JSON array of every input/select/textarea/button on the page.
+Run: `cd ~/.claude/skills/log-task && node scripts/discover-eoffice-form.mjs create-task`, follow the prompt (navigate to Project -> Tasks -> Add task -> Add task, press Enter), inspect the printed elements. Repeat with `report-progress` for the other screen.
 
-- [ ] **Step 4: Hand-write `references/eoffice-form-map.json` from the Step 3 output**
+For each printed element, prefer in this order when choosing `locatorType`: (1) `role` + accessible name if the element has a real ARIA role and visible name (button/textbox/combobox roles are common), (2) `labelText` via `getByLabel`, (3) visible button/link `text` via `getByText`. Only fall back to matching on `id`/`name` if none of the above are present (and if so, still express it as a Playwright locator built from that value, e.g. `page.locator('#id')`, not by inventing a new locatorType outside the three above).
 
-Match the printed elements to logical field names (task name, date, hours/description, submit button) using their `name`/`id`/`ariaLabel`. Example shape (values here are illustrative placeholders for the shape only -- replace every value with what Step 3 actually printed for your instance of eOffice; do not ship this example verbatim):
+Write `references/eoffice-form-map.json` with both `createTask` and `reportProgress` sections. `createTask.fields` must include `taskName`, appropriate date field(s), a description/notes field, and the four person fields (`assignor`, `assignee`, `follower`, `collaborator`) each marked `"type": "person"`. `reportProgress.fields` must include a report date field, a progress field, and a description field. `reportProgress.successSignal` must describe the visible `100%` progress readout AND the `Evaluating` status text -- if these are two different elements, extend the schema's `successSignal` to an array of `{locatorType, locatorValue, role, matches}` rather than forcing both into one; document that shape here and use it consistently in Task 6/7.
 
-```json
-{
-  "taskEntryUrl": "https://eoffice.novagroup.vn/REPLACE/WITH/REAL/PATH",
-  "fields": {
-    "taskName": { "selector": "REPLACE -- e.g. #task_name or [name=taskName]", "type": "text" },
-    "date": { "selector": "REPLACE", "type": "date" },
-    "hours": { "selector": "REPLACE", "type": "text" },
-    "description": { "selector": "REPLACE", "type": "textarea" }
-  },
-  "submitSelector": "REPLACE -- e.g. button[type=submit]",
-  "successSignal": { "selector": "REPLACE -- an element that only appears after a successful submit", "matches": "REPLACE -- expected text, or empty string if presence alone is enough" }
-}
-```
+- [ ] **Step 4: Verify the map is usable and complete**
 
-- [ ] **Step 5: Verify the map is usable**
-
-Run: `node -e "console.log(JSON.parse(require('fs').readFileSync('references/eoffice-form-map.json','utf-8')).fields)"`
-Expected: prints the real field map with no `REPLACE` placeholders remaining.
+Run: `node -e "const m = JSON.parse(require('fs').readFileSync('references/eoffice-form-map.json','utf-8')); console.log(Object.keys(m.createTask.fields)); console.log(Object.keys(m.reportProgress.fields));"`
+Expected: `createTask.fields` includes `assignor`, `assignee`, `follower`, `collaborator` alongside the task fields; `reportProgress.fields` includes a progress and description field; no `REPLACE`-style placeholder values remain anywhere in the file.
 
 ---
 
-### Task 6: `eoffice-write.mjs` -- dry-run mode
+### Task 6: `eoffice-write.mjs` -- dry-run mode, both actions
 
 **Files:**
 - Create: `~/.claude/skills/log-task/scripts/eoffice-write.mjs`
+- Create: `~/.claude/skills/log-task/scripts/lib/eoffice-locators.mjs` (shared locator-builder, used by both this task and Task 7)
 
 **Interfaces:**
 - Consumes: `.eoffice-session.json` (Task 3), `references/eoffice-form-map.json` (Task 5).
-- Produces (used by Task 7 and `SKILL.md`): CLI `node scripts/eoffice-write.mjs --dry-run <tasks.json>` where `tasks.json` is `[{ "taskName": string, "date": "YYYY-MM-DD", "hours": string, "description": string }]` (the four keys must match `eoffice-form-map.json`'s `fields` keys -- if the real form's fields differ, this shape changes to match Task 5's actual output, not this example). Exit codes: `0` success, `3` no/invalid session (redirected to login), `4` form-map missing a required field.
+- Produces (used by Task 7 and `SKILL.md`): CLI `node scripts/eoffice-write.mjs <create-task|report-progress> --dry-run <tasks.json>`. For `create-task`, `tasks.json` is `[{ "taskName": string, ...date/description fields matching the form map, "assignor": string, "assignee": string, "follower": string, "collaborator": string }]` -- person fields are visible names (e.g. `"Me"`, `"Sếp Châu"`), resolved by the caller (`references/eoffice.md`'s write procedure, Task 7) from `projects.json`'s `params` before this script ever runs; this script does not itself consult `projects.json`. For `report-progress`, `tasks.json` is `[{ "taskName": string, "reportDate": "YYYY-MM-DD", "progress": "100", "description": string }]`. Exit codes: `0` success, `3` no/invalid session, `4` form-map or required-field problem, `6` a person field's value doesn't match any option on the real form (ambiguous -- do not guess).
 
-- [ ] **Step 1: Write `eoffice-write.mjs`'s dry-run path**
+- [ ] **Step 1: Write the shared locator builder `scripts/lib/eoffice-locators.mjs`**
+
+```js
+// scripts/lib/eoffice-locators.mjs
+//
+// Builds a Playwright Locator from an eoffice-form-map.json entry shaped
+// { locatorType: "role"|"label"|"text", locatorValue: string, role?: string }.
+// Centralizing this in one place means Task 5's discovery format and
+// Task 6/7's fill/submit code can never drift out of sync with each other.
+
+export function buildLocator(page, spec) {
+  if (spec.locatorType === 'role') {
+    return page.getByRole(spec.role, { name: spec.locatorValue });
+  }
+  if (spec.locatorType === 'label') {
+    return page.getByLabel(spec.locatorValue);
+  }
+  if (spec.locatorType === 'text') {
+    return page.getByText(spec.locatorValue);
+  }
+  throw new Error(`Unknown locatorType "${spec.locatorType}" in eoffice-form-map.json`);
+}
+```
+
+- [ ] **Step 2: Write `eoffice-write.mjs`'s shared setup + dry-run path**
 
 ```js
 #!/usr/bin/env node
@@ -777,17 +833,22 @@ import { chromium } from 'playwright';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildLocator } from './lib/eoffice-locators.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSION_PATH = path.join(__dirname, '..', '.eoffice-session.json');
 const FORM_MAP_PATH = path.join(__dirname, '..', 'references', 'eoffice-form-map.json');
 
-const args = process.argv.slice(2);
-const dryRun = args.includes('--dry-run');
-const tasksPath = args.find((a) => !a.startsWith('--'));
+const [, , action, ...rest] = process.argv;
+const dryRun = rest.includes('--dry-run');
+const tasksPath = rest.find((a) => !a.startsWith('--'));
 
+if (action !== 'create-task' && action !== 'report-progress') {
+  console.error('Usage: node eoffice-write.mjs <create-task|report-progress> [--dry-run] <tasks.json>');
+  process.exit(1);
+}
 if (!tasksPath) {
-  console.error('Usage: node eoffice-write.mjs [--dry-run] <tasks.json>');
+  console.error('Missing <tasks.json> argument.');
   process.exit(1);
 }
 if (!fs.existsSync(SESSION_PATH)) {
@@ -800,11 +861,21 @@ if (!fs.existsSync(FORM_MAP_PATH)) {
 }
 
 const formMap = JSON.parse(fs.readFileSync(FORM_MAP_PATH, 'utf-8'));
+const actionMap = action === 'create-task' ? formMap.createTask : formMap.reportProgress;
+if (!actionMap) {
+  console.error(`eoffice-form-map.json has no "${action === 'create-task' ? 'createTask' : 'reportProgress'}" section.`);
+  process.exit(4);
+}
 const tasks = JSON.parse(fs.readFileSync(tasksPath, 'utf-8'));
 
-for (const fieldName of Object.keys(formMap.fields)) {
+const PERSON_FIELDS = ['assignor', 'assignee', 'follower', 'collaborator'];
+for (const fieldName of Object.keys(actionMap.fields)) {
   for (const task of tasks) {
     if (!(fieldName in task)) {
+      if (PERSON_FIELDS.includes(fieldName)) {
+        console.error(`Task "${task.taskName || '(unnamed)'}" has no "${fieldName}" resolved. This must come from projects.json's params before eoffice-write.mjs runs -- never guessed here.`);
+        process.exit(6);
+      }
       console.error(`Task "${task.taskName || '(unnamed)'}" is missing field "${fieldName}" required by the form map.`);
       process.exit(4);
     }
@@ -812,14 +883,17 @@ for (const fieldName of Object.keys(formMap.fields)) {
 }
 
 if (dryRun) {
-  console.log('Dry run -- planned actions per task, no browser will be opened:');
+  console.log(`Dry run (${action}) -- planned actions per task, no browser will be opened:`);
   for (const task of tasks) {
-    console.log(`\n- Navigate to ${formMap.taskEntryUrl}`);
-    for (const [fieldName, field] of Object.entries(formMap.fields)) {
-      console.log(`  Fill ${field.selector} (${field.type}) with: ${task[fieldName]}`);
+    console.log(`\n- Navigate: ${actionMap.navigation}`);
+    for (const [fieldName, field] of Object.entries(actionMap.fields)) {
+      console.log(`  Fill [${field.locatorType}:${field.locatorValue}] (${field.type}) with: ${task[fieldName]}`);
     }
-    console.log(`  Click ${formMap.submitSelector}`);
-    console.log(`  Confirm success via ${formMap.successSignal.selector}`);
+    console.log(`  Click [${actionMap.submitLocator.locatorType}:${actionMap.submitLocator.locatorValue}]`);
+    const signals = Array.isArray(actionMap.successSignal) ? actionMap.successSignal : [actionMap.successSignal];
+    for (const signal of signals) {
+      console.log(`  Confirm [${signal.locatorType}:${signal.locatorValue}] matches "${signal.matches}"`);
+    }
   }
   process.exit(0);
 }
@@ -828,19 +902,22 @@ console.error('Real-submit mode is not implemented yet (Task 7 of PLAN.md).');
 process.exit(1);
 ```
 
-- [ ] **Step 2: Verify the dry-run output**
+- [ ] **Step 3: Verify the dry-run output for both actions**
 
 Run:
 ```bash
 cd ~/.claude/skills/log-task
-echo '[{"taskName":"Test task","date":"2026-08-28","hours":"1","description":"Dry run check"}]' > /tmp/log-task-test-tasks.json
-node scripts/eoffice-write.mjs --dry-run /tmp/log-task-test-tasks.json
+echo '[{"taskName":"Test task","assignor":"Me","assignee":"Me","follower":"Sếp Châu","collaborator":"Sếp Châu","description":"Dry run check"}]' > /tmp/log-task-test-create.json
+node scripts/eoffice-write.mjs create-task --dry-run /tmp/log-task-test-create.json
+
+echo '[{"taskName":"Test task","reportDate":"2026-08-28","progress":"100","description":"Dry run check"}]' > /tmp/log-task-test-report.json
+node scripts/eoffice-write.mjs report-progress --dry-run /tmp/log-task-test-report.json
 ```
-Expected: prints the planned navigate/fill/click/confirm sequence for the one test task, using the real selectors from `eoffice-form-map.json`, and exits `0`. No browser window opens (dry-run never launches Playwright's browser).
+Expected: each prints its own planned navigate/fill/click/confirm sequence using the real locator specs from `eoffice-form-map.json`, and exits `0`. No browser window opens for either (dry-run never launches Playwright's browser). Also run `create-task --dry-run` with a task object missing `"follower"` and confirm it exits `6` with the exact "must come from projects.json" message, not a generic missing-field error.
 
 ---
 
-### Task 7: `eoffice-write.mjs` -- real submit mode + `references/eoffice.md`
+### Task 7: `eoffice-write.mjs` -- real submit mode (both actions) + `references/eoffice.md`
 
 **Files:**
 - Modify: `~/.claude/skills/log-task/scripts/eoffice-write.mjs`
@@ -848,7 +925,7 @@ Expected: prints the planned navigate/fill/click/confirm sequence for the one te
 
 **Interfaces:**
 - Consumes: same as Task 6.
-- Produces (used by `SKILL.md`, Task 9): real submission with a per-task success/failure result: `{ taskName: string, submitted: boolean, error?: string }[]`, printed as JSON on the last line of output so `SKILL.md` can parse it.
+- Produces (used by `SKILL.md`, Task 9): real submission with a per-task success/failure result: `{ taskName: string, submitted: boolean, error?: string }[]`, printed as JSON on the last line of output so the caller can parse it. Same shape for both `create-task` and `report-progress` -- the caller distinguishes by which action it invoked.
 
 - [ ] **Step 1: Replace the "not implemented" branch with real submission**
 
@@ -862,27 +939,46 @@ const results = [];
 
 for (const task of tasks) {
   try {
-    await page.goto(formMap.taskEntryUrl, { waitUntil: 'networkidle' });
+    await page.goto('https://eoffice.novagroup.vn', { waitUntil: 'networkidle' });
     // A login redirect means the session is stale -- fail fast with exit 3
-    // rather than silently trying to fill a login form.
-    if (!page.url().startsWith(formMap.taskEntryUrl)) {
-      console.error(`Redirected to ${page.url()} -- session appears expired. Re-run eoffice-session.mjs.`);
+    // rather than silently trying to fill a login form. eOffice's real
+    // navigation is manual multi-click (Task 5), not a fixed deep-link URL,
+    // so staleness is detected by absence of the expected first-step
+    // element rather than a URL mismatch.
+    if (page.url().includes('/login')) {
+      console.error(`Redirected to login -- session appears expired. Re-run eoffice-session.mjs.`);
       await browser.close();
       process.exit(3);
     }
-    for (const [fieldName, field] of Object.entries(formMap.fields)) {
-      if (field.type === 'select') {
-        await page.selectOption(field.selector, task[fieldName]);
+
+    for (const [fieldName, field] of Object.entries(actionMap.fields)) {
+      const locator = buildLocator(page, field);
+      if (field.type === 'select' || field.type === 'person') {
+        await locator.selectOption({ label: task[fieldName] }).catch(async () => {
+          // Some person/select fields are combobox-style rather than a
+          // native <select> -- fall back to click + option-by-text.
+          await locator.click();
+          const option = page.getByRole('option', { name: task[fieldName] });
+          if (!(await option.count())) {
+            throw new Error(`No option matching "${task[fieldName]}" for field "${fieldName}" -- not guessing, stopping here.`);
+          }
+          await option.click();
+        });
       } else {
-        await page.fill(field.selector, String(task[fieldName]));
+        await locator.fill(String(task[fieldName]));
       }
     }
-    await page.click(formMap.submitSelector);
-    await page.waitForSelector(formMap.successSignal.selector, { timeout: 10_000 });
-    if (formMap.successSignal.matches) {
-      const text = await page.locator(formMap.successSignal.selector).innerText();
-      if (!text.includes(formMap.successSignal.matches)) {
-        throw new Error(`Success signal found but text "${text}" did not match "${formMap.successSignal.matches}"`);
+
+    const submitLocator = buildLocator(page, actionMap.submitLocator);
+    await submitLocator.click();
+
+    const signals = Array.isArray(actionMap.successSignal) ? actionMap.successSignal : [actionMap.successSignal];
+    for (const signal of signals) {
+      const signalLocator = buildLocator(page, signal);
+      await signalLocator.waitFor({ timeout: 10_000 });
+      const text = await signalLocator.innerText();
+      if (!text.includes(signal.matches)) {
+        throw new Error(`Success signal [${signal.locatorType}:${signal.locatorValue}] found but read "${text}", expected to include "${signal.matches}"`);
       }
     }
     results.push({ taskName: task.taskName, submitted: true });
@@ -896,7 +992,7 @@ console.log(JSON.stringify(results));
 process.exit(results.every((r) => r.submitted) ? 0 : 5);
 ```
 
-(Exit `5` = partial or total submission failure -- distinct from `3`/`4` so `SKILL.md` can tell "some tasks failed to submit" apart from "session/config problem before we even tried.")
+(Exit `5` = partial or total submission failure -- distinct from `3`/`4`/`6` so the caller can tell "some tasks failed to submit" apart from "session/config/ambiguous-person problem before we even tried.")
 
 - [ ] **Step 2: Write `references/eoffice.md`**
 
@@ -904,6 +1000,8 @@ process.exit(results.every((r) => r.submitted) ? 0 : 5);
 # eoffice platform
 
 Writes via a bundled Playwright script -- no gstack, no MCP browser tool.
+Real eOffice task logging is TWO separate actions, each with its own
+confirmation gate -- never chain them without a check in between.
 
 ## One-time setup (per machine)
 
@@ -911,35 +1009,44 @@ Writes via a bundled Playwright script -- no gstack, no MCP browser tool.
 2. `npx playwright install chromium`
 3. Log into `https://eoffice.novagroup.vn` in your normal Chrome.
 4. `node scripts/eoffice-session.mjs` -- imports that session.
+5. Configure default people fields for this project in `projects.json`'s
+   `params`: `defaultAssignor`, `defaultAssignee`, `defaultFollower`,
+   `defaultCollaborator` (visible names as they appear in eOffice, e.g.
+   `"Me"`, `"Sếp Châu"`). If a task's evidence doesn't make one of these
+   obvious and no default is configured, stop and ask -- never guess a
+   person.
 
 Re-run step 3-4 whenever `eoffice-write.mjs` reports session expired (exit
 code 3).
 
 ## Draft format
 
-Same grouping/fields as `manual.md`'s draft.
+Same grouping/fields as `manual.md`'s draft. Only tasks whose `Status` is
+clearly `Done` are eligible for the `report-progress` step below --
+`Partial`/`Investigation completed` tasks get created (if not already) but
+never get a 100%-progress report, since that would misrepresent unfinished
+work as complete.
 
 ## Write procedure
 
-1. Convert the approved draft's tasks into the JSON array shape
-   `eoffice-write.mjs` expects (see `references/eoffice-form-map.json`'s
-   `fields` keys for exactly which keys each task object needs).
+1. Convert the approved draft's tasks into the JSON shapes
+   `eoffice-write.mjs` expects for each action (see
+   `references/eoffice-form-map.json`'s `createTask.fields` /
+   `reportProgress.fields` keys for exactly which keys each task object
+   needs). Resolve `assignor`/`assignee`/`follower`/`collaborator` from
+   `projects.json`'s `params.default*` fields; if a task's evidence
+   suggests a different person than the default and it's genuinely
+   ambiguous, stop and ask rather than picking one.
 2. If `.eoffice-session.json` doesn't exist, run `node scripts/eoffice-session.mjs` first.
-3. Run `node scripts/eoffice-write.mjs --dry-run <tasks.json>`, show the
-   output to the user, get a second explicit confirmation.
-4. Run `node scripts/eoffice-write.mjs <tasks.json>` (no `--dry-run`).
-5. Parse the last line of output as JSON (`{ taskName, submitted, error? }[]`).
-   Ledger only the entries where `submitted: true` (no `externalId` -- eOffice's
-   confirmation page doesn't expose a stable row ID in this version). Report
-   every `submitted: false` entry by name and its `error`, and stop -- don't
-   retry automatically.
-6. If the script exits with code `3`, tell the user to log into eOffice in
-   Chrome and re-run `eoffice-session.mjs`, then retry from step 3.
+3. **Create step**: run `node scripts/eoffice-write.mjs create-task --dry-run <tasks.json>` for every task not already known to exist in eOffice, show the output, get an explicit confirmation, then run without `--dry-run`.
+4. **Report step** (separate confirmation -- do not fold into step 3): for every task whose Status is `Done` (created just now, or already existing), run `node scripts/eoffice-write.mjs report-progress --dry-run <tasks.json>`, show the output, get a **second, separate** explicit confirmation, then run without `--dry-run`.
+5. Parse the last line of each run's output as JSON (`{ taskName, submitted, error? }[]`). Ledger an entry only after **both** its create and report steps report `submitted: true` (no `externalId` -- eOffice's confirmation screens don't expose a stable row ID in this version). Report every `submitted: false` entry by name and its `error`, and stop -- don't retry automatically.
+6. If a script exits with code `3`, tell the user to log into eOffice in Chrome and re-run `eoffice-session.mjs`, then retry from step 3. If it exits with code `6`, report exactly which person field was ambiguous and for which task, and ask the user to resolve it (fix `projects.json`'s default or clarify the task) before retrying.
 ```
 
-- [ ] **Step 3: Verify -- single low-stakes task, headed**
+- [ ] **Step 3: Verify -- single low-stakes task, headed, both actions separately**
 
-Change `chromium.launch({ headless: true })` to `chromium.launch({ headless: false })` temporarily, run against one real, low-stakes task, watch the browser fill and submit it, confirm it appears on the real eOffice task list afterward, then change back to `headless: true`.
+Change `chromium.launch({ headless: true })` to `chromium.launch({ headless: false })` temporarily. Run `create-task` against one real, low-stakes task and watch it submit; confirm the task appears in eOffice. Then, as a **separate** run, run `report-progress` against that same task and watch it submit; confirm the task now reads `100%` / `Evaluating`. Do not skip straight to `report-progress` without having watched `create-task` succeed first — verifying each action independently is the point of having two gates. Change back to `headless: true` afterward.
 
 ---
 
@@ -1089,15 +1196,24 @@ write the file back.
 
 - [ ] **Step 1: Add nova's real entry**
 
+Ask the user to confirm the real visible names for the default people fields before writing this (do not guess `defaultFollower`/`defaultCollaborator` from anything seen in the reference recording -- that recording was a different person's eOffice account):
+
 ```json
 {
   "/Users/trannguyendanghuy/Workspace/work/nova": {
     "platform": "eoffice",
     "gitEmails": ["itc.cv.1@novagroup.vn", "trannguyendanhuy2904@gmail.com"],
-    "params": {}
+    "params": {
+      "defaultAssignor": "<confirmed visible name>",
+      "defaultAssignee": "<confirmed visible name>",
+      "defaultFollower": "<confirmed visible name>",
+      "defaultCollaborator": "<confirmed visible name>"
+    }
   }
 }
 ```
+
+**Note (2026-08-28):** Steps 2-3 below (the `lark`/dominode half of this task) are already complete -- see the SDD ledger (`.superpowers/sdd/PLAN/progress.md`) for the real, verified values and dry-run evidence. They're left here unchanged as the historical record of what was done; only Step 1 and Step 4 (the `eoffice`/nova half) were still open as of the eOffice design revision.
 
 - [ ] **Step 2: Add happyland-of-draken/dominode's real entry**
 
@@ -1121,9 +1237,9 @@ Ask the user for the real `baseToken`/`tableId`/`prefix` if not already captured
 
 `cd` into the dominode project, run `/log-task`, approve the draft, and confirm the flow reaches `lark-cli base +record-upsert --dry-run` and shows a sane preview -- then stop before the real write for this verification pass (per DESIGN.md's testing guidance, don't enable real Lark writes until the payload's been eyeballed against the Task table's field schema at least once).
 
-- [ ] **Step 4: Verify `eoffice` end-to-end, single low-stakes task, headed**
+- [ ] **Step 4: Verify `eoffice` end-to-end, single low-stakes task, headed, both actions**
 
-`cd` into nova, run `/log-task`, approve a draft containing exactly one low-stakes real task, and let it run through to a real submission (headed browser, per Task 7 Step 3's temporary toggle) -- confirm the task appears on the real eOffice task list afterward, then switch `eoffice-write.mjs` back to `headless: true` for normal use.
+`cd` into nova, run `/log-task`, approve a draft containing exactly one low-stakes real `Done` task. Let it run through `create-task` (headed browser, per Task 7 Step 3's temporary toggle) and confirm the task appears in eOffice -- as its own, separately-confirmed step. Only then run `report-progress` for that same task, as a second separately-confirmed step, and confirm it now reads `100%` / `Evaluating`. Then switch `eoffice-write.mjs` back to `headless: true` for normal use.
 
 - [ ] **Step 5: Final check -- re-run both**
 
