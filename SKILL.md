@@ -41,26 +41,32 @@ since my last run" or an explicit range).
 **Git commits**, run inside the project root, once per configured email.
 `--since`/`--until` filter by COMMITTER date ONLY, regardless of whether you
 also pass `--author` or `--committer` -- they do NOT implement an
-author-date check, and a commit authored inside the window but rebased or
-re-committed later (committer date now outside the window) would otherwise
-be silently invisible. So: widen `--since` by ~14 days as a coarse
-pre-filter purely to keep the output small, then do the real window check
-yourself, client-side, on both dates:
+author-date check, so they can't be trusted to bound the window on either
+side: a commit authored inside the window but rebased or re-committed
+earlier or later (committer date now outside the window in either
+direction) would otherwise be silently invisible. So: use `--since` only as
+a widened (~14 days early), coarse pre-filter purely to keep the output
+small -- do NOT pass `--until` at all, since it would just as silently clip
+off commits whose committer date has drifted past the window on the other
+side. Do the real window check yourself, client-side, on both dates,
+after the git call:
 
-    git log --all --since="<window-start minus 14 days>" --until="<window-end>" \
+    git log --all --since="<window-start minus 14 days>" \
       --author="<email>" --date=iso-strict \
       --pretty=format:'%H|%ad|%cd|%an|%s'
 
-    git log --all --since="<window-start minus 14 days>" --until="<window-end>" \
+    git log --all --since="<window-start minus 14 days>" \
       --committer="<email>" --date=iso-strict \
       --pretty=format:'%H|%ad|%cd|%an|%s'
 
 Union the two passes by commit hash (dedupe), then, from that combined set,
 keep ONLY commits where the author date (`%ad`) OR the committer date
 (`%cd`) falls within the REAL requested window
-(`<window-start>`..`<window-end>`). This client-side OR-check -- not the
-`--since`/`--until` flags -- is what actually implements "checking both
-dates," and is what catches the rebase/cherry-pick case.
+(`<window-start>`..`<window-end>`). This client-side OR-check is the ONLY
+thing enforcing both the lower AND upper bound of the window -- neither
+`--since` nor `--until` do real date-bounding work here, `--since` is
+purely an output-size pre-filter. This is what catches the rebase/cherry-
+pick case in either direction.
 
 **Claude prompt history**, filtered to this project and window:
 
