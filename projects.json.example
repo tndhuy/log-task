@@ -1,10 +1,22 @@
 {
-  "/absolute/path/to/your/project": {
-    "platform": "eoffice | lark | manual",
+  "/absolute/path/to/eoffice/project": {
+    "platform": "eoffice",
     "gitEmails": ["you@example.com"],
     "params": {
-      "// eoffice params": "defaultAssignor, defaultAssignee, defaultFollower, defaultCollaborator (visible names)",
-      "// lark params": "baseToken, tableId, prefix, fieldMap (see references/lark.md)"
+      "defaultAssignor": "<visible current-user name>",
+      "defaultAssignee": "<visible current-user name>",
+      "defaultFollower": "<visible eOffice name>",
+      "defaultCollaborator": "<same visible name as defaultFollower>"
+    }
+  },
+  "/absolute/path/to/lark/project": {
+    "platform": "lark",
+    "gitEmails": ["you@example.com"],
+    "params": {
+      "baseToken": "<base token>",
+      "tableId": "<table id>",
+      "prefix": "[Project]",
+      "fieldMap": {}
     }
   }
 }

@@ -1,6 +1,6 @@
 # log-task — Design Spec
 
-Status: approved, not yet implemented.
+Status: implemented locally; supervised live eOffice verification pending.
 Date: 2026-08-27
 
 ## Problem
@@ -351,18 +351,10 @@ against real data. `eoffice` has an actual script, so it gets both:
 
 Resolved during implementation (kept here only as a pointer, not re-litigated): git log's author/committer/date handling (Task 8, two fix rounds — see the SDD ledger); `cookie-import-browser.ts` → `cookie-import.mjs` porting (Task 2, one fix round); `.eoffice-session.json` location and gitignore (Task 1, confirmed).
 
-- `projects.json`'s `happyland-of-draken/dominode → lark` entry is done and
-  verified against the live Lark base (Task 9). The `nova → eoffice` entry
-  is still pending — now unblocked by the real-workflow info below, but
-  not yet wired.
-- eOffice's task-entry form has never been driven programmatically by
-  *this* codebase, but a real-workflow reference is now available (a
-  separate Codex-built recording of the actual UI,
-  `nova-work-log-deliverable.zip`, analyzed 2026-08-28 — see the two new
-  paragraphs under Platforms/`eoffice` and Components/`eoffice-write.mjs`
-  above for what it revealed: two-step create-then-report workflow,
-  required people fields, semantic-locator strategy, the `100%`/
-  `Evaluating` success signal). Task 5's discovery pass still needs to run
-  against the real, live eOffice UI to produce concrete selectors/labels
-  for *this* user's actual eOffice instance — the reference only tells us
-  the shape of the workflow, not this instance's exact field labels/URLs.
+- The eOffice Playwright writer, semantic form map, discovery utility,
+  two-action confirmation procedure, and automated dry runs are implemented.
+  The map is grounded in the 2026-08-26 Record & Replay capture.
+- The ignored `projects.json` still needs the user's real Nova mapping and
+  visible people names. A supervised headed run must verify the current live
+  form before unattended use; no live eOffice mutation is part of automated
+  verification.

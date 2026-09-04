@@ -1,5 +1,11 @@
 # log-task Implementation Plan
 
+Current status (2026-09-03): the eOffice writer, recorded semantic form map,
+discovery utility, adapter documentation, dry-run fixtures, and automated
+tests are implemented. The remaining operational gate is a supervised live
+run after the ignored `projects.json` is configured with confirmed visible
+names; no automated test submits to eOffice.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the `log-task` Claude Code skill at `~/.claude/skills/log-task/` — a manually-invoked (`/log-task`) tool that gathers evidence of completed work (git commits, Claude history, checkpoint notes), dedupes it against a per-project ledger, drafts it in a platform-specific shape, and — after explicit approval — writes it to that project's declared platform (`eoffice`, `lark`, or `manual`).
