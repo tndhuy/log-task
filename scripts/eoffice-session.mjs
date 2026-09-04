@@ -12,6 +12,13 @@ export function buildStorageState(cookies) {
   return { cookies, origins: [] };
 }
 
+export function saveStorageState(sessionPath, cookies) {
+  fs.writeFileSync(sessionPath, JSON.stringify(buildStorageState(cookies), null, 2), {
+    mode: 0o600,
+  });
+  fs.chmodSync(sessionPath, 0o600);
+}
+
 function main() {
   let result;
   try {
@@ -27,7 +34,7 @@ function main() {
     console.error(`No ${DOMAIN} session found in Chrome. Log into eOffice in Chrome, then re-run this script.`);
     process.exit(1);
   }
-  fs.writeFileSync(SESSION_PATH, JSON.stringify(buildStorageState(result.cookies), null, 2));
+  saveStorageState(SESSION_PATH, result.cookies);
   console.log(`Saved eOffice session (${result.count} cookie(s)) to ${SESSION_PATH}`);
 }
 
