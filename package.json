@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Personal skill: log completed work into a project's declared platform (eoffice, lark, or manual).",
   "scripts": {
-    "test": "node --test scripts/**/*.test.mjs"
+    "test": "node --test scripts/*.test.mjs scripts/**/*.test.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",

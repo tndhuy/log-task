@@ -1,0 +1,13 @@
+[
+  {
+    "project": "<visible eOffice project name>",
+    "taskName": "[BE] - Example completed task",
+    "taskCode": "",
+    "assignor": "<visible current-user name>",
+    "assignee": "<visible current-user name>",
+    "follower": "<visible follower name>",
+    "collaborator": "<visible follower name>",
+    "startDate": "2026-08-25",
+    "endDate": "2026-08-26"
+  }
+]
