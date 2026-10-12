@@ -34,5 +34,32 @@
       "repo-a": { "params": { "project": "<eOffice project name>" } },
       "repo-b": { "params": { "project": "<eOffice project name>" }, "gitEmails": ["other@example.com"] }
     }
+  },
+  "/absolute/path/to/nova-api-group-root": {
+    "type": "group",
+    "platform": "eoffice-api",
+    "gitEmails": ["you@example.com"],
+    "logDir": ".log-task",
+    "children": {
+      "one-nova-be": {
+        "params": {
+          "project": "<eOffice project name>",
+          "projectRef": "<project code or raw ID, per UAT checklist>",
+          "projectId": "<raw project ID>"
+        },
+        "rules": {
+          "nameTemplate": "[NVG.ITD - CDS Tập Đoàn] - One Nova - {layer} - {summary}",
+          "layer":     { "mode": "fixed", "value": "BE" },
+          "parent":    { "mode": "ask", "remember": true, "candidates": [
+                          { "id": 2089469, "label": "OneNova -P5- Development" },
+                          { "id": 2087612, "label": "05. One Nova - Phase 5 CDS thư ký - Điểm danh cuộc họp" } ] },
+          "owner":     { "mode": "ask", "default": "<your full name>", "remember": true },
+          "assignees": { "mode": "ask", "default": ["<your full name>", "<colleague full name>"], "remember": true },
+          "followers": { "mode": "fixed", "value": [] },
+          "dates":     { "actualFromPlan": true },
+          "done":      { "status": "REVIEW" }
+        }
+      }
+    }
   }
 }

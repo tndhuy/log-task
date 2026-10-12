@@ -1,6 +1,6 @@
 ---
 name: log-task
-description: Log completed work into a project's declared platform (eoffice, lark, or manual). Trigger: /log-task
+description: Log completed work into a project's declared platform (eoffice, eoffice-api, lark, or manual). Trigger: /log-task
 ---
 
 # log-task
@@ -23,12 +23,12 @@ to add to `projects.json` (when the file is missing, the user creates it from
 `projects.json.example`; never create or guess the file yourself):
 
     "<absolute-path-to-project-root>": {
-      "platform": "eoffice" | "lark" | "manual",
+      "platform": "eoffice" | "eoffice-api" | "lark" | "manual",
       "gitEmails": ["you@example.com"],
       "params": {}
     }
 
-or, for a workspace holding several repos (eOffice only):
+or, for a workspace holding several repos (eoffice and eoffice-api):
 
     "<absolute-path-to-group-root>": {
       "type": "group",
@@ -44,7 +44,8 @@ Never guess a platform for an unlisted project.
 
 The JSON on stdout has `mode` (`standalone`, `group-run`, or `child-run`),
 `key`, `groupRoot` and `logRoot` (both null for standalone), and `targets`. Each target has `name`, `path`, `platform`, `gitEmails`, `params`,
-and `ledgerPath`. Steps 2-4 run once per target; in `group-run`, Steps 5-7 run
+`ledgerPath`, `rules` and `statePath`. `statePath` is the file to pass to
+`--state`; `rules` is written to a temp rules.json. Steps 2-4 run once per target; in `group-run`, Steps 5-7 run
 once for the whole group (see "Group runs" below).
 
 ## Step 2: Load the ledger
@@ -192,12 +193,12 @@ Applies when Step 1 returns `mode: "group-run"`. `child-run` follows the normal
 - Steps 2-4 per target, reporting dropped candidates per target. If no target
   has new candidates, report "nothing new to log" and stop.
 - Step 5-6: one draft grouped target -> module -> task, following
-  `references/eoffice.md`, showing each target's `params.project`. List
+  `references/eoffice.md` (or `references/eoffice-api.md` for eoffice-api targets), showing each target's `params.project`. List
   targets with nothing new as "nothing new". After approval, save the draft to
   `<logRoot>/drafts/<window-start>_<window-end>_<HHmmss>.md` (never overwrite).
   This draft save and the `.gitignore` prompt below apply to any run with a
   non-null `groupRoot` (group-run and child-run).
-- Step 7: follow `references/eoffice.md` "Write procedure" with each task's
+- Step 7 (for an `eoffice-api` target, follow the "eoffice-api platform" section below instead): for `eoffice-api` targets use one `batch.json`, one rules file and one state file PER TARGET, run `create --dry-run` for EVERY target first and stop the whole group if any dry-run fails, and only then run `--apply` per target (each needing its own approval naming the host). For other targets, follow `references/eoffice.md` "Write procedure" with each task's
   `project` taken from its target. Keep the two gates separate. If
   `create-task --dry-run` fails for any target, stop the whole batch before any
   real create and name the failing target. The dry-run checks input and the
@@ -209,3 +210,11 @@ Applies when Step 1 returns `mode: "group-run"`. `child-run` follows the normal
 - Ledger writes use a temp file + rename, as always.
 - If `groupRoot` is itself a git repo and does not ignore `.log-task/`, ask
   before adding it to that repo's `.gitignore`.
+
+## eoffice-api platform
+
+When a target's `platform` is `eoffice-api`, replace the platform-specific
+parts of Steps 5-7 with `references/eoffice-api.md` ("Draft format" and
+"Procedure"). Everything else (evidence, per-target ledger, group runs, approval
+gates) is unchanged. Never read `.env`; ask the user to run commands with
+`node --env-file=<path>`. A token is never printed or stored.

@@ -57,7 +57,7 @@ plugin the author happens to have — only Node.js (for `eoffice`) or the
 
 ## Platforms
 
-Three distinct platform values, not two-plus-a-fallback — each project
+Four distinct platform values (`eoffice`, `eoffice-api`, `lark`, `manual`), not two-plus-a-fallback — each project
 declares exactly one in `projects.json`:
 
 - **`eoffice`** — writes via a small Playwright script bundled inside the
@@ -102,6 +102,10 @@ declares exactly one in `projects.json`:
   lesson from actually building this ("target visible labels, not screen
   coordinates") ports directly onto Playwright's own locator API without
   needing a vision/Computer-Use dependency.
+- **`eoffice-api`** — creates tasks through the `work-normal-normal` API with
+  per-project `rules`; see
+  `docs/superpowers/specs/2026-10-12-eoffice-api-writer-design.md`. The
+  Playwright `eoffice` platform remains as the fallback and for progress reports.
 - **`lark`** — writes via the `lark-cli` Open API (dry-run, then real
   write), as already used successfully for dominode's Sprint 4 milestones.
   `lark-cli` is an external binary the user installs themselves, same as
@@ -115,9 +119,9 @@ declares exactly one in `projects.json`:
 
 - No automatic/proactive triggering (e.g. end-of-session prompts). Manual
   `/log-task` only, for now.
-- No formal plugin/adapter registry framework. Three platforms are known;
-  the "adapter" is reference docs plus, for `eoffice` only, one bundled
-  script — not a generic code interface. Revisit if a fourth platform
+- No formal plugin/adapter registry framework. Four platforms are known;
+  the "adapter" is reference docs plus, for `eoffice` and `eoffice-api`,
+  bundled scripts — not a generic code interface. Revisit if a fifth platform
   actually shows up.
 - No fuzzy/AI-based dedup. Ledger-based exact fingerprint match is enough
   for now.
