@@ -18,5 +18,21 @@
       "prefix": "[Project]",
       "fieldMap": {}
     }
+  },
+  "/absolute/path/to/nova-group-root": {
+    "type": "group",
+    "platform": "eoffice",
+    "gitEmails": ["you@example.com"],
+    "logDir": ".log-task",
+    "params": {
+      "defaultAssignor": "<visible current-user name>",
+      "defaultAssignee": "<visible current-user name>",
+      "defaultFollower": "<visible eOffice name>",
+      "defaultCollaborator": "<same visible name as defaultFollower>"
+    },
+    "children": {
+      "repo-a": { "params": { "project": "<eOffice project name>" } },
+      "repo-b": { "params": { "project": "<eOffice project name>" }, "gitEmails": ["other@example.com"] }
+    }
   }
 }

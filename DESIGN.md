@@ -131,13 +131,10 @@ declares exactly one in `projects.json`:
   module already covers (Chrome/Chromium-family on macOS/Linux/Windows).
   Firefox/Safari cookie stores are a different format — out of scope
   unless actually needed.
-- No multi-repo/workspace scanning. A separate reference implementation
-  (`nova-work-log-deliverable.zip`, analyzed 2026-08-28) discovers and
-  logs across multiple repos under one root; considered and explicitly
-  deferred here — `/log-task` still resolves exactly one project from
-  `cwd` per invocation. Real feature, but a scope expansion beyond what's
-  broken today; revisit only if actually needed, not because a reference
-  tool happens to have it.
+- No automatic repo discovery. Multi-repo logging is supported only for an
+  explicitly declared `type: "group"` entry; see
+  `docs/superpowers/specs/2026-10-12-group-log-task-design.md`. A single
+  invocation still resolves exactly one config entry from `cwd`.
 - No exclusion of merge commits from evidence. The same reference
   implementation drops `--no-merges`; we deliberately keep merges as
   milestone/status markers (e.g. "Status: Merged" — see the live

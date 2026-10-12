@@ -119,7 +119,7 @@ Steps 2–4 run once per child; Steps 5–7 run once for the whole group.
 
 ## Ledger migration
 
-One-off, on first group run when old ledgers exist:
+One-off, before loading the ledger of any run (group or child) that touches a child with an old skill-dir ledger; a child run must not start from an empty ledger and re-log old work:
 
 1. For each declared child, compute its old ledger key from its absolute path
    (existing rule: strip leading `/`, replace `/` with `-`).
@@ -148,7 +148,8 @@ One-off, on first group run when old ledgers exist:
 - `references/eoffice.md`: group draft layout and per-task `project`.
 - `projects.json.example`: add a group entry.
 - `DESIGN.md`: replace the multi-repo non-goal with a pointer to this spec.
-- No script changes expected; `eoffice-write.mjs` already takes `project` per
+- `scripts/resolve-project.mjs`, `scripts/lib/resolve-project.mjs`, `scripts/lib/ledger-migration.mjs` (deterministic resolution, ownership check, migration planning, with tests).
+- No change to `eoffice-write.mjs`; it already takes `project` per
   task (confirmed: `fixtures/eoffice-create.example.json`, form map `locatorValueField`).
 
 ## Validation

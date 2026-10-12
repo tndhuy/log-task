@@ -11,10 +11,12 @@ to be in a hurry.
 
 ## Step 1: Resolve the project
 
-Run `pwd` to get the current working directory. Read `projects.json`. Find
-the config key that is a prefix of the current directory (if more than one
-matches, use the longest). If none matches, stop and show the user this
-template to add:
+Run, from the skill directory:
+
+    node scripts/resolve-project.mjs resolve --cwd "$(pwd)"
+
+On exit code 2, show the stderr message and stop. If it says no project is
+configured, show the user this template to add to `projects.json`:
 
     "<absolute-path-to-project-root>": {
       "platform": "eoffice" | "lark" | "manual",
@@ -22,23 +24,48 @@ template to add:
       "params": {}
     }
 
+or, for a workspace holding several repos (eOffice only):
+
+    "<absolute-path-to-group-root>": {
+      "type": "group",
+      "platform": "eoffice",
+      "gitEmails": ["you@example.com"],
+      "logDir": ".log-task",
+      "params": { "defaultAssignor": "...", "defaultAssignee": "...",
+                  "defaultFollower": "...", "defaultCollaborator": "..." },
+      "children": { "<repo-relative-path>": { "params": { "project": "<eOffice project name>" } } }
+    }
+
 Never guess a platform for an unlisted project.
+
+The JSON on stdout has `mode` (`standalone`, `group-run`, or `child-run`) and
+`targets`. Each target has `name`, `path`, `platform`, `gitEmails`, `params`,
+and `ledgerPath`. Steps 2-4 run once per target; in `group-run`, Steps 5-7 run
+once for the whole group (see "Group runs" below).
 
 ## Step 2: Load the ledger
 
-Compute the ledger path: strip the config key's leading `/`, then replace
-every remaining `/` with `-`; call the result `<ledger-key>` (e.g.
-`/tmp/log-task-dogfood-repo` -> `tmp-log-task-dogfood-repo`, and a nested key
-like `/Users/x/work/nova` -> `Users-x-work-nova`). Read
-`ledger/<ledger-key>.json`. If the file doesn't exist, treat it as `[]`.
-Reuse this exact path in Step 7 -- don't recompute it differently there.
+If `mode` is `group-run` or `child-run`, first run:
+
+    node scripts/resolve-project.mjs migration-plan --cwd "$(pwd)"
+
+If `moves` is non-empty or `legacyRoot` is set, show the list and wait for
+approval. Then, for each approved move whose `conflict` is `false`, run
+`mv -n <from> <to>` after `mkdir -p` of the destination's directory. A move
+with `conflict: true` is never executed; stop and ask. A `legacyRoot` ledger
+matches no child: ask whether to leave it or move it to
+`<logRoot>/ledger/_legacy-root.json`; its fingerprints are never applied to a
+child automatically.
+
+Then read each target's `ledgerPath`. A missing file is `[]`. Reuse exactly
+this path in Step 7 -- don't recompute it.
 
 ## Step 3: Gather evidence
 
 Ask the user for the date window if not already given (e.g. "log everything
 since my last run" or an explicit range).
 
-**Git commits**, run inside the project root, once per configured email.
+**Git commits**, run inside the target's `path`, once per email in the target's `gitEmails`.
 `--since`/`--until` filter by COMMITTER date ONLY, regardless of whether you
 also pass `--author` or `--committer` -- they do NOT implement an
 author-date check, so they can't be trusted to bound the window on either
@@ -70,7 +97,7 @@ pick case in either direction.
 
 **Claude prompt history**, filtered to this project and window:
 
-    jq -c --arg proj "<project-root>" \
+    jq -c --arg proj "<target path>" \
       'select(.project == $proj)' ~/.claude/history.jsonl
 
   Then filter the results to the window by comparing each entry's
@@ -78,7 +105,7 @@ pick case in either direction.
 
 **Checkpoint / daily notes**, if present:
 
-    ls <project-root>/.remember/today-*.done.md <project-root>/.checkpoint/*.md 2>/dev/null
+    ls <target path>/.remember/today-*.done.md <target path>/.checkpoint/*.md 2>/dev/null
 
   Read whichever of these fall inside the window.
 
@@ -100,7 +127,10 @@ For each candidate, compute a fingerprint over its full set of backing
 commit hashes, sorted and comma-joined (not just the oldest/newest -- a
 squashed or partially cherry-picked evidence set should still match):
 
-    echo -n "<project-key>|<normalized-task-name>|<sorted-comma-joined-commit-hashes>" | shasum -a 1 | cut -d' ' -f1
+    echo -n "<target-path>|<normalized-task-name>|<sorted-comma-joined-commit-hashes>" | shasum -a 1 | cut -d' ' -f1
+
+For a standalone project the target path equals the config key, so existing
+fingerprints are unchanged.
 
 Drop any candidate where EITHER:
 - its fingerprint already appears in the loaded ledger (**fingerprint
@@ -138,7 +168,29 @@ proceed to Step 7 without it, regardless of how the request was phrased.
 Follow `references/<platform>.md`'s "Write procedure" section exactly. After
 it completes (fully, partially, or not at all -- manual's "write" is just
 saving a file), append every successfully-logged task to the same ledger
-file resolved in Step 2 (`ledger/<ledger-key>.json`), with the fingerprint
+file resolved in Step 2 (the target's `ledgerPath`), with the fingerprint
 computed in Step 4 and an `evidenceCommits` array of every backing commit
 hash (needed for Step 4's commit-anchored dedup check on future runs), then
 write the file back.
+
+## Group runs
+
+Applies when Step 1 returns `mode: "group-run"`. `child-run` follows the normal
+7 steps with one target.
+
+- Ask the date window once; use it for every target.
+- Steps 2-4 per target, reporting dropped candidates per target. If no target
+  has new candidates, report "nothing new to log" and stop.
+- Step 5-6: one draft grouped target -> module -> task, following
+  `references/eoffice.md`, showing each target's `params.project`. List
+  targets with nothing new as "nothing new". After approval, save the draft to
+  `<logRoot>/drafts/<window-start>_<window-end>_<HHmmss>.md` (never overwrite).
+- Step 7: follow `references/eoffice.md` "Write procedure" with each task's
+  `project` taken from its target. Keep the two gates separate. If
+  `create-task --dry-run` fails for any target, stop the whole batch before any
+  real create and name the failing target. Append a task to its **own target's**
+  ledger only after every required step for that task succeeded; a failure in
+  one target does not block ledgering the others.
+- Ledger writes use a temp file + rename, as always.
+- If `groupRoot` is itself a git repo and does not ignore `.log-task/`, ask
+  before adding it to that repo's `.gitignore`.

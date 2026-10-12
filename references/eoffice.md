@@ -36,11 +36,16 @@ mutation task may enter either the creation or reporting batch. A `Partial`,
 investigation-only, review, or verification-only item must not be created or
 reported by this workflow.
 
+For a group run, group the draft target -> module -> task and print each
+target's resolved eOffice project (`params.project`) in its heading. Targets
+with no new work appear as "nothing new".
+
 ## Write procedure
 
 1. Convert each approved creation draft to JSON with `project`, `taskName`,
    optional `taskCode`, `assignor`, `assignee`, `follower`, `collaborator`,
-   `startDate`, and `endDate`. Resolve people from the project's `params`.
+   `startDate`, and `endDate`. Resolve people from the target's merged `params` (group defaults overridden
+   by the child), and set `project` from the target's `params.project`.
 2. Run `node scripts/eoffice-write.mjs create-task --dry-run <tasks.json>`.
    Show the complete preview and obtain explicit approval immediately before
    the real create operation.
@@ -58,6 +63,8 @@ reported by this workflow.
 7. Append a task to the ledger only after all required external steps for that
    task succeeded. Preserve any returned `externalLink`; do not invent one when
    eOffice exposes no stable link.
+8. In a group run, ledger each task into its own target's ledger; creation and
+   reporting batches may span targets but approvals stay separate.
 
 Exit codes: `1` bad CLI usage, `3` missing/expired session, `4` invalid input,
 form map, or local setup, `5` submit/verification failure, and `6` missing or
