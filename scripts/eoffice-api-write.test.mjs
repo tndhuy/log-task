@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,11 +15,31 @@ async function startServer() {
   const posts = [];
   let nextId = 1000;
   let failNextGets = false;
+  const updates = [];
+  const reports = [];
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     let body = '';
     for await (const chunk of req) body += chunk;
     res.setHeader('content-type', 'application/json');
+    if (url.pathname === '/integration-document') {
+      res.setHeader('csrf-token-cache', 'csrf-fresh-0123456789abcdef01234567');
+      res.setHeader('content-type', 'text/html');
+      res.end('<html></html>');
+      return;
+    }
+    if (url.pathname === '/work-task-task/progress') {
+      const ok = req.headers.cookie === 'sess=1' && req.headers['csrf-token-cache'] === 'csrf-fresh-0123456789abcdef01234567';
+      if (!ok) {
+        res.end(JSON.stringify({ message: 'Bạn không có quyền thực hiện chức năng này' }));
+        return;
+      }
+      reports.push({ body, contentType: req.headers['content-type'] });
+      const row = tasks.find((t) => String(t.ID) === /name="ID"\r\n\r\n(\d+)/.exec(body)?.[1]);
+      if (row) { row.status = 'REVIEW'; row.percent = 100; }
+      res.end(JSON.stringify({ close: true, notice: 'Cập nhật thành công' }));
+      return;
+    }
     if (url.searchParams.get('access_token') !== TOKEN) {
       res.end(JSON.stringify({ error: true, code: 'not object', message: 'accesstoken not of object' }));
       return;
@@ -38,6 +58,14 @@ async function startServer() {
       res.end(JSON.stringify({ error: false, total_item: rows.length, data: rows }));
       return;
     }
+    if (url.pathname === '/api/work/normal/update' && req.method === 'POST') {
+      const form = Object.fromEntries(new URLSearchParams(body));
+      updates.push(form);
+      const row = tasks.find((t) => String(t.ID) === form.ID);
+      if (row && form.status === 'Đang đánh giá') { row.status = 'REVIEW'; row.percent = 100; }
+      res.end(JSON.stringify({ error: false, data: { ID: form.ID } }));
+      return;
+    }
     if (url.pathname === '/api/work/normal/insert' && req.method === 'POST') {
       const form = Object.fromEntries(new URLSearchParams(body));
       posts.push(form);
@@ -45,7 +73,7 @@ async function startServer() {
         res.end(JSON.stringify({ error: true, code: 'invalid', message: 'bad title' }));
         return;
       }
-      const row = { ID: nextId++, title: form.title, parent_id: form.parent_id, project_id: 3869, status: 'REVIEW' };
+      const row = { ID: nextId++, title: form.title, parent_id: form.parent_id, project_id: 3869, status: 'DOING', percent: 0 };
       tasks.push(row);
       if (form.title.includes('READBACK')) failNextGets = true;
       res.end(JSON.stringify({ error: false, data: { ID: row.ID } }));
@@ -56,7 +84,7 @@ async function startServer() {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
-  return { server, tasks, posts, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
+  return { server, tasks, posts, updates, reports, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
 }
 
 function run(args, env) {
@@ -96,7 +124,9 @@ function batchFile(summaries, { settings, rulesOverride } = {}) {
   return file;
 }
 
-const env = (s) => ({ EOFFICE_BASE_URL: s.url, EOFFICE_ACCESS_TOKEN: TOKEN });
+const env = (s) => ({
+  EOFFICE_BASE_URL: s.url, EOFFICE_ACCESS_TOKEN: TOKEN, EOFFICE_SETTLE_MS: '0', EOFFICE_SESSION_COOKIE: '',
+});
 const lastLine = (text) => JSON.parse(text.trim().split('\n').at(-1));
 const noToken = (r) => { assert.equal((r.out + r.err).includes(TOKEN), false); };
 
@@ -152,7 +182,11 @@ test('apply creates the task, reads it back, and sends the required fields', asy
     assert.equal(form.project_id, '1456');
     assert.equal(form.parent_id, '2089469');
     assert.equal(form.assign_ids, 'Owner Name,Second Person');
-    assert.equal(form.status_after_report, 'REVIEW');
+    assert.equal('status' in form, false);
+    assert.equal(form.assign_other_off, 'Cho phép xem chéo');
+    assert.equal(result.report, 'status-update-only');
+    assert.equal(result.status, 'REVIEW');
+    assert.deepEqual(s.updates, [{ ID: String(result.externalId), status: 'Đang đánh giá' }]);
     assert.equal(Object.keys(form).some((k) => k.endsWith('_code')), false);
     noToken(r);
   } finally { s.server.close(); }
@@ -235,7 +269,7 @@ test('a failed read-back after a successful insert is reported as created but no
     const results = lastLine(r.out);
     assert.equal(results[0].created, true);
     assert.equal(results[0].submitted, false);
-    assert.match(results[0].error, /created but not confirmed on read-back: .*boom/);
+    assert.match(results[0].error, /created but not finished: .*boom/);
     assert.equal(results[1].submitted, true);
     noToken(r);
   } finally { s.server.close(); }
@@ -272,5 +306,134 @@ test('explicit settings win over fixed rule values', async () => {
     const r = await run(applyArgs(s, batchFile(['Task one'], { settings, rulesOverride: fixed })), env(s));
     assert.equal(r.code, 0, r.err);
     assert.equal(s.posts[0].follower_ids, 'Explicit');
+  } finally { s.server.close(); }
+});
+
+test('with a session cookie the report is posted instead of a status update', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(applyArgs(s, batchFile(['Task one'])), { ...env(s), EOFFICE_SESSION_COOKIE: 'sess=1' });
+    assert.equal(r.code, 0, r.err);
+    const [result] = lastLine(r.out);
+    assert.equal(result.submitted, true);
+    assert.equal(result.report, 'progress-report');
+    assert.equal(s.updates.length, 0);
+    assert.equal(s.reports.length, 1);
+    assert.match(s.reports[0].body, /items\[1\]\[date_report\]"\r\n\r\n08\/10\/2026/);
+    assert.match(s.reports[0].body, /items\[1\]\[percent\]"\r\n\r\n100/);
+    assert.equal((r.out + r.err).includes('sess=1'), false);
+  } finally { s.server.close(); }
+});
+
+test('a rejected report leaves the task reported as created but not finished', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(applyArgs(s, batchFile(['Task one'])), { ...env(s), EOFFICE_SESSION_COOKIE: 'bad' });
+    assert.equal(r.code, 1);
+    const [result] = lastLine(r.out);
+    assert.equal(result.created, true);
+    assert.equal(result.submitted, false);
+    assert.match(result.error, /created but not finished: Progress report refused/);
+  } finally { s.server.close(); }
+});
+
+test('a batch with empty assignees exits 2 before any POST', async () => {
+  const s = await startServer();
+  try {
+    const settings = { parent: 2089469, owner: 'Owner Name', assignees: [] };
+    const r = await run(applyArgs(s, batchFile(['Task one'], { settings })), env(s));
+    assert.equal(r.code, 2);
+    assert.match(r.err, /assignees/);
+    assert.equal(s.posts.length, 0);
+  } finally { s.server.close(); }
+});
+
+function batchWithChildren(parentSummary, childSummaries) {
+  const file = batchFile([parentSummary]);
+  const batch = JSON.parse(readFileSync(file, 'utf8'));
+  batch.tasks[0].children = childSummaries.map((summary) => ({ summary, startPlan: '2026-10-06', endPlan: '2026-10-07' }));
+  writeFileSync(file, JSON.stringify(batch));
+  return file;
+}
+
+test('children are created under the new parent and finished before it', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(applyArgs(s, batchWithChildren('Parent', ['Child A', 'Child B'])), env(s));
+    assert.equal(r.code, 0, r.err);
+    const [parent] = lastLine(r.out);
+    assert.equal(parent.submitted, true);
+    assert.deepEqual(parent.children.map((c) => c.submitted), [true, true]);
+    assert.equal(s.posts.length, 3);
+    assert.equal(s.posts[0].parent_id, '2089469');
+    assert.equal(s.posts[1].parent_id, String(parent.externalId));
+    assert.equal(s.posts[2].parent_id, String(parent.externalId));
+    assert.equal(s.posts[1].title, '[One Nova] - BE - [BE] Child A');
+    assert.equal(s.updates.at(-1).ID, String(parent.externalId));
+  } finally { s.server.close(); }
+});
+
+test('a rerun skips the parent and its children as already existing', async () => {
+  const s = await startServer();
+  try {
+    const args = applyArgs(s, batchWithChildren('Parent', ['Child A']));
+    await run(args, env(s));
+    const r = await run(args, env(s));
+    assert.equal(r.code, 0, r.err);
+    const [parent] = lastLine(r.out);
+    assert.equal(parent.skipped, 'already exists');
+    assert.equal(parent.children[0].skipped, 'already exists');
+    assert.equal(s.posts.length, 2);
+  } finally { s.server.close(); }
+});
+
+test('children are not created when the parent insert fails', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(applyArgs(s, batchWithChildren('FAIL parent', ['Child A'])), env(s));
+    assert.equal(r.code, 1);
+    const [parent] = lastLine(r.out);
+    assert.equal(parent.children[0].error, 'parent task was not created');
+    assert.equal(s.posts.length, 1);
+  } finally { s.server.close(); }
+});
+
+test('dry-run shows children with a placeholder parent and sends no POST', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(['create', '--dry-run', batchWithChildren('Parent', ['Child A'])], env(s));
+    assert.equal(r.code, 0, r.err);
+    const [item] = JSON.parse(r.out).plan;
+    assert.equal(item.children[0].payload.parent_id, '<id of the new parent task>');
+    assert.equal(s.posts.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('with a session cookie, tasks in a hierarchy get a status update, not a report', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(applyArgs(s, batchWithChildren('Parent', ['Child A'])), { ...env(s), EOFFICE_SESSION_COOKIE: 'sess=1' });
+    assert.equal(r.code, 0, r.err);
+    const [parent] = lastLine(r.out);
+    assert.equal(parent.report, 'status-update-only');
+    assert.equal(parent.children[0].report, 'status-update-only');
+    assert.equal(s.reports.length, 0);
+    assert.equal(s.updates.length, 2);
+  } finally { s.server.close(); }
+});
+
+test('nested children (grandchildren) are rejected with exit 2 and no POST', async () => {
+  const s = await startServer();
+  try {
+    const file = batchWithChildren('Parent', ['Child A']);
+    const batch = JSON.parse(readFileSync(file, 'utf8'));
+    batch.tasks[0].children[0].children = [{ summary: 'Grandchild' }];
+    writeFileSync(file, JSON.stringify(batch));
+    for (const args of [['create', '--dry-run', file], applyArgs(s, file)]) {
+      const r = await run(args, env(s));
+      assert.equal(r.code, 2);
+      assert.match(r.err, /Only one level of children/);
+    }
+    assert.equal(s.posts.length, 0);
   } finally { s.server.close(); }
 });
