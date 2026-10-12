@@ -50,7 +50,9 @@ function buildChild(groupKey, group, name, logRoot) {
     platform: group.platform,
     gitEmails: group.children[name].gitEmails ?? group.gitEmails ?? [],
     params,
+    rules: { ...group.rules, ...group.children[name].rules },
     ledgerPath: path.join(logRoot, 'ledger', `${ledgerKey(path.relative(groupKey, childPath))}.json`),
+    statePath: path.join(logRoot, 'state', `${ledgerKey(path.relative(groupKey, childPath))}.json`),
   };
 }
 
@@ -76,6 +78,8 @@ export function resolveProject(config, cwd, { skillDir }) {
         gitEmails: entry.gitEmails ?? [],
         params: entry.params ?? {},
         ledgerPath: path.join(skillDir, 'ledger', `${ledgerKey(key)}.json`),
+        rules: entry.rules ?? {},
+        statePath: path.join(skillDir, 'state', `${ledgerKey(key)}.json`),
       }],
     };
   }

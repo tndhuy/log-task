@@ -1,3 +1,7 @@
 node_modules/
 .eoffice-session.json
 projects.json
+state/
+.env
+.env.*
+!.env.example

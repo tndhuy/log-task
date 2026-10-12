@@ -134,3 +134,28 @@ test('a repo owned by both a group and a standalone entry is rejected', () => {
       && e.message.includes('/w/nova/api') && e.message.includes('/w/nova'),
   );
 });
+
+test('group child merges rules per top-level key and gets a statePath', () => {
+  const c = config();
+  c['/w/nova'].rules = { nameTemplate: 'T {summary}', done: { status: 'REVIEW' } };
+  c['/w/nova'].children.api.rules = { done: { status: 'COMPLETED' } };
+  const r = resolveProject(c, '/w/nova', { skillDir });
+  const [api, web] = r.targets;
+  assert.deepEqual(api.rules, { nameTemplate: 'T {summary}', done: { status: 'COMPLETED' } });
+  assert.deepEqual(web.rules, { nameTemplate: 'T {summary}', done: { status: 'REVIEW' } });
+  assert.equal(api.statePath, '/w/nova/.log-task/state/api.json');
+  assert.equal(web.statePath, '/w/nova/.log-task/state/web.json');
+});
+
+test('group child without any rules gets an empty rules object', () => {
+  const r = resolveProject(config(), '/w/nova', { skillDir });
+  assert.deepEqual(r.targets[0].rules, {});
+});
+
+test('standalone target carries its rules and a skill-dir statePath', () => {
+  const c = config();
+  c['/w/solo'].rules = { nameTemplate: '{summary}' };
+  const r = resolveProject(c, '/w/solo', { skillDir });
+  assert.deepEqual(r.targets[0].rules, { nameTemplate: '{summary}' });
+  assert.equal(r.targets[0].statePath, '/skill/state/w-solo.json');
+});
