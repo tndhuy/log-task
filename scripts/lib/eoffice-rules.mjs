@@ -13,7 +13,7 @@ export const REQUIRED_FLAG_DEFAULTS = Object.freeze({
 });
 
 // Without field_raws the API takes display values; only REVIEW was verified on UAT.
-export const STATUS_DISPLAY = Object.freeze({ REVIEW: 'Đang đánh giá' });
+export const STATUS_DISPLAY = Object.freeze({ DOING: 'Đang thực hiện', REVIEW: 'Đang đánh giá' });
 
 const ALLOWED_FLAG_KEYS = new Set([...Object.keys(REQUIRED_FLAG_DEFAULTS), 'progress_type', 'method']);
 const TEMPLATE_VARS = new Set(['layer', 'summary']);
@@ -79,8 +79,8 @@ export function validateRules(rules) {
     throw new RulesError('rules.layer must be fixed (set a per-task "layer" in the batch to vary it)');
   }
   if (rules.dates !== undefined) validateDates(rules.dates);
-  if (rules.done?.status !== undefined && !(rules.done.status in STATUS_DISPLAY)) {
-    throw new RulesError(`rules.done.status must be one of ${Object.keys(STATUS_DISPLAY).join(', ')}`);
+  if (rules.done?.status !== undefined && rules.done.status !== 'REVIEW') {
+    throw new RulesError(`rules.done.status must be REVIEW`);
   }
   if (rules.flags !== undefined) {
     if (!rules.flags || typeof rules.flags !== 'object' || Array.isArray(rules.flags)) {

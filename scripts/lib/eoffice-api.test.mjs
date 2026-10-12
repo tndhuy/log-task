@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  EofficeApiError, createClient, findParents, findDuplicate, insertTask,
+  EofficeApiError, createClient, findParents, findDuplicate, insertTask, isUatHost,
 } from './eoffice-api.mjs';
 
 const TOKEN = 'secret-token-123';
@@ -147,4 +147,16 @@ test('a non-array data field is bad_body', async () => {
   const c = client(() => ({ body: { error: false, data: {} } }));
   await assert.rejects(() => findParents(c, { projectId: '1', search: 's' }),
     (e) => e instanceof EofficeApiError && e.code === 'bad_body');
+});
+
+test('isUatHost matches the allowlist exactly, not lookalike hosts', () => {
+  assert.equal(isUatHost('eoffice-uat.novagroup.vn', ''), true);
+  for (const host of ['eoffice.novagroup.vn', 'prod-uat.corp.com', 'eoffice.uat.attacker.com', 'uat-eoffice-prod.company.com', 'eoffice-uat.novagroup.vn.evil.com']) {
+    assert.equal(isUatHost(host, ''), false, host);
+  }
+});
+
+test('isUatHost honors a comma-separated override and ignores the default then', () => {
+  assert.equal(isUatHost('a.test', 'a.test, b.test'), true);
+  assert.equal(isUatHost('eoffice-uat.novagroup.vn', 'a.test'), false);
 });

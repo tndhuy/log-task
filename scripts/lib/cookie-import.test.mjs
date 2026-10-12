@@ -8,6 +8,10 @@ import {
   toPlaywrightCookie,
   validateProfile,
   decryptRows,
+  getBrowser,
+  BROWSER_NAMES,
+  domainsFor,
+  cookieHeader,
 } from './cookie-import.mjs';
 
 function encryptForFixture(plainValue, key) {
@@ -109,4 +113,24 @@ test('decryptRows propagates a v20 (unsupported encoding) error instead of swall
     encrypted_value: Buffer.concat([Buffer.from('v20'), Buffer.alloc(10)]),
   };
   assert.throws(() => decryptRows([v20Row], new Map()), /not supported/);
+});
+
+test('getBrowser knows Chrome and Brave with their own Keychain services', () => {
+  assert.deepEqual(BROWSER_NAMES, ['chrome', 'brave']);
+  assert.equal(getBrowser('brave').keychainService, 'Brave Safe Storage');
+  assert.equal(getBrowser('chrome').keychainService, 'Chrome Safe Storage');
+});
+
+test('getBrowser rejects an unknown browser', () => {
+  assert.throws(() => getBrowser('firefox'), /Unsupported browser/);
+});
+
+test('domainsFor lists the host and its dotted parent domains, never the top-level suffix', () => {
+  assert.deepEqual(domainsFor('eoffice-uat.novagroup.vn'), [
+    'eoffice-uat.novagroup.vn', '.eoffice-uat.novagroup.vn', '.novagroup.vn',
+  ]);
+});
+
+test('cookieHeader joins cookies into a Cookie header value', () => {
+  assert.equal(cookieHeader([{ name: 'a', value: '1' }, { name: 'b', value: '2' }]), 'a=1; b=2');
 });

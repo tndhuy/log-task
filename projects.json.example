@@ -44,7 +44,7 @@
       "one-nova-be": {
         "params": {
           "project": "<eOffice project name>",
-          "projectRef": "<project code or raw ID, per UAT checklist>",
+          "projectRef": "<project code (verified on UAT)>",
           "projectId": "<raw project ID>"
         },
         "rules": {

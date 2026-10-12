@@ -36,7 +36,11 @@ async function startServer() {
       }
       reports.push({ body, contentType: req.headers['content-type'] });
       const row = tasks.find((t) => String(t.ID) === /name="ID"\r\n\r\n(\d+)/.exec(body)?.[1]);
-      if (row) { row.status = 'REVIEW'; row.percent = 100; }
+      if (!row || row.status !== 'DOING') {
+        res.end(JSON.stringify({ message: 'Bạn không có quyền thực hiện chức năng này' }));
+        return;
+      }
+      row.status = 'REVIEW'; row.percent = 100;
       res.end(JSON.stringify({ close: true, notice: 'Cập nhật thành công' }));
       return;
     }
@@ -63,6 +67,7 @@ async function startServer() {
       updates.push(form);
       const row = tasks.find((t) => String(t.ID) === form.ID);
       if (row && form.status === 'Đang đánh giá') { row.status = 'REVIEW'; row.percent = 100; }
+      if (row && form.status === 'Đang thực hiện') row.status = 'DOING';
       res.end(JSON.stringify({ error: false, data: { ID: form.ID } }));
       return;
     }
@@ -73,7 +78,7 @@ async function startServer() {
         res.end(JSON.stringify({ error: true, code: 'invalid', message: 'bad title' }));
         return;
       }
-      const row = { ID: nextId++, title: form.title, parent_id: form.parent_id, project_id: 3869, status: 'DOING', percent: 0 };
+      const row = { ID: nextId++, title: form.title, parent_id: form.parent_id, project_id: 3869, status: 'PENDING', percent: 0 };
       tasks.push(row);
       if (form.title.includes('READBACK')) failNextGets = true;
       res.end(JSON.stringify({ error: false, data: { ID: row.ID } }));
@@ -317,7 +322,8 @@ test('with a session cookie the report is posted instead of a status update', as
     const [result] = lastLine(r.out);
     assert.equal(result.submitted, true);
     assert.equal(result.report, 'progress-report');
-    assert.equal(s.updates.length, 0);
+    assert.equal(result.status, 'REVIEW');
+    assert.deepEqual(s.updates.map((u) => u.status), ['Đang thực hiện']);
     assert.equal(s.reports.length, 1);
     assert.match(s.reports[0].body, /items\[1\]\[date_report\]"\r\n\r\n08\/10\/2026/);
     assert.match(s.reports[0].body, /items\[1\]\[percent\]"\r\n\r\n100/);
@@ -435,5 +441,27 @@ test('nested children (grandchildren) are rejected with exit 2 and no POST', asy
       assert.match(r.err, /Only one level of children/);
     }
     assert.equal(s.posts.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('--session-from rejects an unknown browser and dry-run use, sending no POST', async () => {
+  const s = await startServer();
+  try {
+    const bad = await run([...applyArgs(s, batchFile(['Task one'])).slice(0, -1), '--session-from', 'firefox', batchFile(['Task one'])], env(s));
+    assert.equal(bad.code, 2);
+    assert.match(bad.err, /chrome or brave/);
+    const dry = await run(['create', '--dry-run', '--session-from', 'brave', batchFile(['Task one'])], env(s));
+    assert.equal(dry.code, 2);
+    assert.match(dry.err, /only applies to --apply/);
+    assert.equal(s.posts.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('a host listed in EOFFICE_UAT_HOSTS applies without --allow-production', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(['create', '--apply', '--confirm-host', s.host, batchFile(['Task one'])], { ...env(s), EOFFICE_UAT_HOSTS: s.host });
+    assert.equal(r.code, 0, r.err);
+    assert.equal(s.posts.length, 1);
   } finally { s.server.close(); }
 });

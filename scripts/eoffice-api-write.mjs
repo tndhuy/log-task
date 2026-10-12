@@ -2,7 +2,7 @@
 import * as fs from 'node:fs';
 import { UsageError, flag } from './lib/cli-args.mjs';
 import {
-  EofficeApiError, createClient, findDuplicate, findParents, insertTask, readTask, updateTask,
+  EofficeApiError, createClient, findDuplicate, findParents, insertTask, isUatHost, readTask, updateTask,
 } from './lib/eoffice-api.mjs';
 import { createProgressClient } from './lib/eoffice-progress.mjs';
 import {
@@ -12,9 +12,7 @@ import {
 const USAGE = `Usage:
   eoffice-api-write.mjs search-parent --project-id <rawId> --search <text>
   eoffice-api-write.mjs create --dry-run <batch.json>
-  eoffice-api-write.mjs create --apply --confirm-host <host> [--allow-production] <batch.json>`;
-
-const isUatHost = (host) => /(^|[.-])uat([.-]|$)/i.test(host);
+  eoffice-api-write.mjs create --apply --confirm-host <host> [--allow-production] [--session-from chrome|brave] <batch.json>`;
 
 function readBatch(file) {
   if (!file || file.startsWith('--')) throw new UsageError(USAGE);
@@ -50,15 +48,24 @@ function applyFixedRules(batch) {
   batch.settings = settings;
 }
 
+async function cookieFromBrowser(browser, host) {
+  const { importCookies, domainsFor, cookieHeader } = await import('./lib/cookie-import.mjs');
+  const { cookies } = importCookies(domainsFor(host), 'Default', browser);
+  if (cookies.length === 0) {
+    throw new UsageError(`No ${browser} cookies for ${host}: sign in to eOffice in ${browser} first`);
+  }
+  return cookieHeader(cookies);
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const firstLine = (err) => String(err?.message ?? err).split('\n')[0];
 
-function assertApplyAllowed(args, client) {
+function assertApplyAllowed(args, client, env) {
   if (flag(args, '--confirm-host') !== client.host) {
     throw new UsageError(`--apply needs --confirm-host ${client.host}`);
   }
-  if (!isUatHost(client.host) && !args.includes('--allow-production')) {
-    throw new UsageError(`${client.host} is not a UAT host: refused. --allow-production may be added only when the user states in this run that the UAT checklist is complete`);
+  if (!isUatHost(client.host, env.EOFFICE_UAT_HOSTS) && !args.includes('--allow-production')) {
+    throw new UsageError(`${client.host} is not in the UAT allowlist (EOFFICE_UAT_HOSTS): refused. --allow-production may be added only when the user states in this run that the UAT checklist is complete`);
   }
 }
 
@@ -80,7 +87,12 @@ async function main(argv, env) {
   if (apply === args.includes('--dry-run')) {
     throw new UsageError('create needs exactly one of --dry-run or --apply');
   }
-  if (apply) assertApplyAllowed(args, client);
+  if (apply) assertApplyAllowed(args, client, env);
+  const sessionFrom = flag(args, '--session-from');
+  if (sessionFrom !== undefined && !apply) throw new UsageError('--session-from only applies to --apply');
+  if (sessionFrom !== undefined && !['chrome', 'brave'].includes(sessionFrom)) {
+    throw new UsageError('--session-from must be chrome or brave');
+  }
 
   const batch = readBatch(args.at(-1));
   const buildItem = async (task, parentId, seen) => {
@@ -122,9 +134,8 @@ async function main(argv, env) {
   }
 
   const settleMs = Number(env.EOFFICE_SETTLE_MS ?? 3000);
-  const progress = env.EOFFICE_SESSION_COOKIE
-    ? createProgressClient({ baseUrl: env.EOFFICE_BASE_URL, cookie: env.EOFFICE_SESSION_COOKIE })
-    : null;
+  const cookie = env.EOFFICE_SESSION_COOKIE || (sessionFrom ? await cookieFromBrowser(sessionFrom, client.host) : '');
+  const progress = cookie ? createProgressClient({ baseUrl: env.EOFFICE_BASE_URL, cookie }) : null;
   const doneStatus = STATUS_DISPLAY[batch.rules.done?.status ?? 'REVIEW'];
   const readBack = (item, parentId) => readTask(client, { title: item.title, parentId });
 
@@ -152,6 +163,9 @@ async function main(argv, env) {
   async function complete(item, inserted, parentId, reportable) {
     await sleep(settleMs);
     if (progress && reportable) {
+      // The server refuses a report while the task is still PENDING.
+      await updateTask(client, { id: inserted.id, status: STATUS_DISPLAY.DOING });
+      await sleep(settleMs);
       await progress.reportProgress({
         taskId: inserted.id, date: item.reportDate, percent: 100, note: item.note,
       });
@@ -210,7 +224,7 @@ async function main(argv, env) {
 main(process.argv.slice(2), process.env).then(
   (code) => { process.exitCode = code; },
   (err) => {
-    const usage = err instanceof UsageError || err instanceof RulesError
+    const usage = err instanceof UsageError || err instanceof RulesError || err?.name === 'CookieImportError'
       || (err instanceof EofficeApiError && err.code === 'missing_env');
     if (usage || err instanceof EofficeApiError) {
       console.error(err.message.split('\n')[0]);

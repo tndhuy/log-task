@@ -2,14 +2,16 @@
 
 Creates tasks through the `work-normal-normal` API. Credentials come only from
 `EOFFICE_BASE_URL` and `EOFFICE_ACCESS_TOKEN`; the agent never reads `.env`.
-Optional `EOFFICE_SESSION_COOKIE` (a browser session cookie, passed inline, never
-stored) enables the progress-report record, which the integration API cannot create.
+Optional session cookie enables the progress-report record: either `EOFFICE_SESSION_COOKIE`
+(passed inline, never stored) or `--session-from brave|chrome` on `create --apply`, which reads
+the eOffice host's cookies from the browser profile in memory (macOS asks for Keychain
+access; sign in to eOffice in that browser first). It enables the progress-report record, which the integration API cannot create.
 
 ## Verified write flow (UAT)
 
 Per task: `insert` (no `status`; enums as display values; people as **usernames**;
 `project_id` = project code) → wait 3 s → ONE of:
-- with `EOFFICE_SESSION_COOKIE`: `POST /work-task-task/progress` (CSRF taken from the
+- with a session cookie: `update status="Đang thực hiện"` (the server refuses a report while the task is PENDING), wait, then `POST /work-task-task/progress` (CSRF taken from the
   `csrf-token-cache` response header of a `reloadCsrfToken=1` request). This writes the
   report record (date, reporter, 100%, note).
 - without it: exactly one `update` with `ID` and `status="Đang đánh giá"`
@@ -143,5 +145,5 @@ target host. Only `Done` tasks may be created.
 
 - `accesstoken not of object`: the token lacks permission for `work-normal-normal`; stop.
 - Missing `EOFFICE_BASE_URL` or `EOFFICE_ACCESS_TOKEN`: exit 2 naming the variable.
-- Apply refused (exit 2): wrong or missing `--confirm-host`, or non-UAT host without `--allow-production`.
+- Apply refused (exit 2): wrong or missing `--confirm-host`, or a host that is not in the UAT allowlist without `--allow-production`. The allowlist is the exact host list in `EOFFICE_UAT_HOSTS` (comma-separated); when unset it is `eoffice-uat.novagroup.vn`. Lookalike hosts such as `prod-uat.corp.com` are not UAT.
 - Partial failure: exit 1; ledger only the confirmed tasks.

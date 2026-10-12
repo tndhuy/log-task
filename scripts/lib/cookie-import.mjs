@@ -3,7 +3,7 @@
 // Ported from gstack's browse/src/cookie-import-browser.ts.
 // Source: ~/.claude/skills/gstack/browse/src/cookie-import-browser.ts
 //
-// Scope of this port: macOS + Linux, Chrome only, "Default" profile.
+// Scope of this port: macOS + Linux, Chrome and Brave, "Default" profile by default.
 // Windows (DPAPI key unwrap) and v20 App-Bound Encryption (Chrome 127+ on
 // Windows) are NOT ported -- decryptCookieValue throws for v20 instead of
 // silently failing; getHostPlatform() throws for any platform other than
@@ -46,11 +46,30 @@ export class CookieImportError extends Error {
   }
 }
 
-const CHROME = {
-  darwinDataDir: 'Google/Chrome',
-  linuxDataDir: 'google-chrome',
-  keychainService: 'Chrome Safe Storage',
+const BROWSERS = {
+  chrome: {
+    label: 'Chrome',
+    darwinDataDir: 'Google/Chrome',
+    linuxDataDir: 'google-chrome',
+    keychainService: 'Chrome Safe Storage',
+  },
+  brave: {
+    label: 'Brave',
+    darwinDataDir: 'BraveSoftware/Brave-Browser',
+    linuxDataDir: 'BraveSoftware/Brave-Browser',
+    keychainService: 'Brave Safe Storage',
+  },
 };
+
+export const BROWSER_NAMES = Object.keys(BROWSERS);
+
+export function getBrowser(name) {
+  const browser = BROWSERS[name];
+  if (!browser) {
+    throw new CookieImportError(`Unsupported browser "${name}" (use ${BROWSER_NAMES.join(' or ')})`, 'bad_request');
+  }
+  return browser;
+}
 
 const CHROMIUM_EPOCH_OFFSET = 11644473600000000n;
 const keyCache = new Map();
@@ -75,14 +94,14 @@ export function validateProfile(profile) {
   }
 }
 
-function getCookieDbPath(profile) {
+function getCookieDbPath(profile, browser) {
   validateProfile(profile);
   const platform = getHostPlatform();
-  const dataDir = platform === 'darwin' ? CHROME.darwinDataDir : CHROME.linuxDataDir;
+  const dataDir = platform === 'darwin' ? browser.darwinDataDir : browser.linuxDataDir;
   const dbPath = path.join(getBaseDir(platform), dataDir, profile, 'Cookies');
   if (!fs.existsSync(dbPath)) {
     throw new CookieImportError(
-      `Chrome is not installed or has no cookies (looked for ${dbPath})`,
+      `${browser.label} is not installed or has no cookies (looked for ${dbPath})`,
       'not_installed',
     );
   }
@@ -122,7 +141,7 @@ function openDbFromCopy(dbPath) {
   } catch {
     try { fs.unlinkSync(tmpPath); } catch {}
     throw new CookieImportError(
-      'Session database is locked (Chrome may be running). Close Chrome and retry.',
+      'Session database is locked (the browser may be running). Close it and retry.',
       'db_locked',
     );
   }
@@ -139,7 +158,7 @@ function getMacKeychainPassword(service) {
   if (result.status !== 0) {
     const err = (result.stderr || '').toLowerCase();
     if (err.includes('could not be found')) {
-      throw new CookieImportError(`No Keychain entry for "${service}". Is Chrome installed?`, 'keychain_not_found');
+      throw new CookieImportError(`No Keychain entry for "${service}". Is the browser installed?`, 'keychain_not_found');
     }
     throw new CookieImportError(`Keychain access denied for "${service}". Click "Allow" in the macOS dialog.`, 'keychain_denied');
   }
@@ -157,19 +176,19 @@ function deriveKey(password, iterations) {
   return crypto.pbkdf2Sync(password, 'saltysalt', iterations, 16, 'sha1');
 }
 
-function getDerivedKeys(platform) {
+function getDerivedKeys(platform, browser) {
   if (platform === 'darwin') {
-    const cacheKey = 'darwin:v10';
+    const cacheKey = `darwin:${browser.keychainService}:v10`;
     if (keyCache.has(cacheKey)) return keyCache.get(cacheKey);
-    const password = getMacKeychainPassword(CHROME.keychainService);
+    const password = getMacKeychainPassword(browser.keychainService);
     const keys = new Map([['v10', deriveKey(password, 1003)]]);
     keyCache.set(cacheKey, keys);
     return keys;
   }
-  const cacheKey = 'linux';
+  const cacheKey = `linux:${browser.keychainService}`;
   if (keyCache.has(cacheKey)) return keyCache.get(cacheKey);
   const keys = new Map([['v10', deriveKey('peanuts', 1)]]);
-  const linuxPassword = getLinuxSecretPassword(CHROME.keychainService);
+  const linuxPassword = getLinuxSecretPassword(browser.keychainService);
   if (linuxPassword) keys.set('v11', deriveKey(linuxPassword, 1));
   keyCache.set(cacheKey, keys);
   return keys;
@@ -251,10 +270,11 @@ export function decryptRows(rows, keys) {
   return { cookies, count: cookies.length, failed };
 }
 
-export function importCookies(domains, profile = 'Default') {
+export function importCookies(domains, profile = 'Default', browserName = 'chrome') {
   if (domains.length === 0) return { cookies: [], count: 0, failed: 0 };
-  const { dbPath, platform } = getCookieDbPath(profile);
-  const keys = getDerivedKeys(platform);
+  const browser = getBrowser(browserName);
+  const { dbPath, platform } = getCookieDbPath(profile, browser);
+  const keys = getDerivedKeys(platform, browser);
   const db = openDb(dbPath);
   try {
     const now = chromiumNow();
@@ -271,4 +291,15 @@ export function importCookies(domains, profile = 'Default') {
   } finally {
     db.close();
   }
+}
+
+export function domainsFor(host) {
+  const labels = host.split('.');
+  const domains = [host];
+  for (let i = 0; i <= labels.length - 2; i++) domains.push(`.${labels.slice(i).join('.')}`);
+  return domains;
+}
+
+export function cookieHeader(cookies) {
+  return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
 }

@@ -108,3 +108,12 @@ export function updateTask(client, { id, status }) {
 export function insertTask(client, payload) {
   return client.call('POST', INSERT, payload);
 }
+
+export const DEFAULT_UAT_HOSTS = ['eoffice-uat.novagroup.vn'];
+
+export function isUatHost(host, allowlist = process.env.EOFFICE_UAT_HOSTS) {
+  const hosts = allowlist
+    ? String(allowlist).split(',').map((entry) => entry.trim()).filter(Boolean)
+    : DEFAULT_UAT_HOSTS;
+  return hosts.includes(host);
+}
