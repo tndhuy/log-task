@@ -66,14 +66,20 @@ A group entry in `projects.json`:
    child, using the merged child config and the group's `logDir`.
 5. Any child directory missing or not a git repo: stop and name it. Never skip
    a declared child silently.
+6. If a child's absolute path is also a top-level config key (or a child of
+   another group), stop and name both entries. One repo must have exactly one
+   owner, otherwise its ledger would split and tasks would be logged twice.
 
 ## State layout
 
 ```
 <group-root>/.log-task/
   ledger/<child-rel-path with "/" → "-">.json
-  drafts/<window-start>_<window-end>.md
+  drafts/<window-start>_<window-end>_<HHmmss>.md
 ```
+
+The time suffix keeps a re-run over the same window from overwriting an
+earlier approved draft.
 
 - Ledger entries keep the existing schema. The fingerprint's `<project-key>`
   is the child's **absolute path** (group root + relative path). This equals
@@ -103,7 +109,9 @@ Steps 2–4 run once per child; Steps 5–7 run once for the whole group.
 7. Write, using the existing eOffice procedure with one change: the task JSON
    batches carry each task's child `project`. The two gates stay separate:
    - **Gate 1**: `create-task --dry-run` for the whole batch, then approval,
-     then real run.
+     then real run. If the dry-run fails for any child (e.g. its eOffice
+     Project is not found), stop the whole batch before any real create and
+     name the failing child; a failed dry-run means nothing was created.
    - **Gate 2**: `report-progress --dry-run`, separate approval, real run.
    Append a task to its **child's** ledger only after all required steps for
    that task succeed. A failure in one child does not block ledgering the
@@ -119,6 +127,10 @@ One-off, on first group run when old ledgers exist:
    the list, and wait for approval.
 3. Move only approved files. Never overwrite an existing destination; if one
    exists, stop and ask.
+4. Also look for a ledger keyed by the group root's own path. It matches no
+   child, so list it and ask the user how to handle it (leave it, or archive
+   it under `logDir/ledger/_legacy-root.json`). Its fingerprints are not
+   applied to any child automatically.
 
 ## Error handling
 
