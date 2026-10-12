@@ -76,7 +76,7 @@ test('buildInsertPayload renders the title and maps people, parent and project',
   assert.equal(payload.parent_id, '2089469');
   assert.equal(payload.owner_ids, 'Trần Nguyễn Đang Huy');
   assert.equal(payload.assign_ids, 'Trần Nguyễn Đang Huy,Hoàng Văn Châu');
-  assert.equal(payload.status, 'REVIEW');
+  assert.equal('status' in payload, false);
 });
 
 test('buildInsertPayload converts dates and omits empty followers', () => {
@@ -88,10 +88,10 @@ test('buildInsertPayload converts dates and omits empty followers', () => {
   assert.equal('follower_ids' in payload, false);
 });
 
-test('buildInsertPayload includes the seven required flags with their defaults', () => {
+test('buildInsertPayload includes the four display-value flags', () => {
   const { payload } = build();
   for (const [k, v] of Object.entries(REQUIRED_FLAG_DEFAULTS)) assert.equal(payload[k], v);
-  assert.equal(Object.keys(REQUIRED_FLAG_DEFAULTS).length, 7);
+  assert.equal(Object.keys(REQUIRED_FLAG_DEFAULTS).length, 4);
 });
 
 test('rules.flags override a default flag', () => {
@@ -147,8 +147,9 @@ test('validateRules accepts allowlisted flags and rejects non-string values or n
   assert.throws(() => validateRules({ ...rules(), flags: null }), RulesError);
 });
 
-test('validateRules restricts done.status to known statuses', () => {
-  assert.equal(validateRules({ ...rules(), done: { status: 'COMPLETED' } }).done.status, 'COMPLETED');
+test('validateRules restricts done.status to the verified statuses', () => {
+  assert.equal(validateRules({ ...rules(), done: { status: 'REVIEW' } }).done.status, 'REVIEW');
+  assert.throws(() => validateRules({ ...rules(), done: { status: 'COMPLETED' } }), RulesError);
   assert.throws(() => validateRules({ ...rules(), done: { status: 'DONE' } }),
     (e) => e instanceof RulesError && e.message.includes('done.status'));
 });
@@ -268,4 +269,10 @@ test('validateRules rejects invalid dates shapes', () => {
     assert.throws(() => validateRules(withDates(dates)), RulesError, JSON.stringify(dates));
   }
   assert.equal(validateRules(withDates({ actualFromPlan: true })).dates.actualFromPlan, true);
+});
+
+test('buildInsertPayload rejects empty assignees', () => {
+  const { rules: r, project, settings } = { rules: rules(), project: { ref: '1456' }, settings: { parent: 1, owner: 'a', assignees: [] } };
+  assert.throws(() => buildInsertPayload(task(), { rules: r, project, settings }),
+    (e) => e instanceof RulesError && e.message.includes('assignees'));
 });

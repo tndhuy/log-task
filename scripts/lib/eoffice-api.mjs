@@ -9,12 +9,19 @@ export class EofficeApiError extends Error {
 
 const GETS = '/api/work/normal/gets';
 const INSERT = '/api/work/normal/insert';
+const UPDATE = '/api/work/normal/update';
 
 export function createClient({ baseUrl, token, fetchImpl = globalThis.fetch }) {
   if (!baseUrl) throw new EofficeApiError('EOFFICE_BASE_URL is not set', { code: 'missing_env' });
   if (!token) throw new EofficeApiError('EOFFICE_ACCESS_TOKEN is not set', { code: 'missing_env' });
-  const host = new URL(baseUrl).host;
-  const scrub = (value) => String(value).split(token).join('<token>');
+  let host;
+  try {
+    host = new URL(baseUrl).host;
+  } catch {
+    throw new EofficeApiError('EOFFICE_BASE_URL is not a valid URL (include https://)', { code: 'missing_env' });
+  }
+  const scrub = (value) => String(value).split(token).join('<token>')
+    .split(encodeURIComponent(token)).join('<token>');
 
   async function call(method, path, params = {}) {
     const url = new URL(path, baseUrl);
@@ -86,6 +93,16 @@ export async function findDuplicate(client, { title, parentId }) {
   const rows = await gets(client, { s: title, parent_id: String(parentId) }, 100);
   const hit = rows.find((row) => row.title === title);
   return hit ? { id: hit.ID, title: hit.title } : null;
+}
+
+export async function readTask(client, { title, parentId }) {
+  const rows = await gets(client, { s: title, parent_id: String(parentId) }, 100);
+  const hit = rows.find((row) => row.title === title);
+  return hit ? { id: hit.ID, title: hit.title, status: hit.status, percent: hit.percent } : null;
+}
+
+export function updateTask(client, { id, status }) {
+  return client.call('POST', UPDATE, { ID: String(id), status });
 }
 
 export function insertTask(client, payload) {

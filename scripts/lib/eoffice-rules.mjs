@@ -6,19 +6,16 @@ export class RulesError extends Error {
 }
 
 export const REQUIRED_FLAG_DEFAULTS = Object.freeze({
-  assign_other_off: '0',
-  is_restrict_subtask_time: 'no',
-  follower_not_view: '0',
-  assign_parent_off: '0',
-  follower_other_not_view: '0',
-  status_after_report: 'REVIEW',
-  is_view_parent_task: '0',
+  assign_other_off: 'Cho phép xem chéo',
+  follower_not_view: 'Cho phép xem',
+  assign_parent_off: 'Cho phép xem',
+  follower_other_not_view: 'Cho phép xem',
 });
 
+// Without field_raws the API takes display values; only REVIEW was verified on UAT.
+export const STATUS_DISPLAY = Object.freeze({ REVIEW: 'Đang đánh giá' });
+
 const ALLOWED_FLAG_KEYS = new Set([...Object.keys(REQUIRED_FLAG_DEFAULTS), 'progress_type', 'method']);
-const DONE_STATUSES = new Set([
-  'PENDING', 'DOING', 'REVIEW', 'COMPLETED', 'NOT_COMPLETED', 'FAIL', 'PAUSE', 'CANCEL', 'EXPECTED', 'CLOSED',
-]);
 const TEMPLATE_VARS = new Set(['layer', 'summary']);
 const FIELD_KEYS = ['layer', 'parent', 'owner', 'assignees', 'followers'];
 const SETTING_FIELDS = ['parent', 'owner', 'assignees', 'followers'];
@@ -82,8 +79,8 @@ export function validateRules(rules) {
     throw new RulesError('rules.layer must be fixed (set a per-task "layer" in the batch to vary it)');
   }
   if (rules.dates !== undefined) validateDates(rules.dates);
-  if (rules.done?.status !== undefined && !DONE_STATUSES.has(rules.done.status)) {
-    throw new RulesError(`rules.done.status must be one of ${[...DONE_STATUSES].join(', ')}`);
+  if (rules.done?.status !== undefined && !(rules.done.status in STATUS_DISPLAY)) {
+    throw new RulesError(`rules.done.status must be one of ${Object.keys(STATUS_DISPLAY).join(', ')}`);
   }
   if (rules.flags !== undefined) {
     if (!rules.flags || typeof rules.flags !== 'object' || Array.isArray(rules.flags)) {
@@ -131,12 +128,14 @@ export function buildInsertPayload(task, { rules, project, settings }) {
     throw new RulesError('settings.parent is required');
   }
   if (!project?.ref) throw new RulesError('project.ref is required');
+  if (!settings.assignees?.length) {
+    throw new RulesError('settings.assignees needs at least one username (tasks without an assignee trigger an automatic warning)');
+  }
 
   const layer = task.layer ?? rules.layer?.value;
   const title = renderName(rules.nameTemplate, { layer, summary: task.summary.trim() });
   const payload = {
     title,
-    status: rules.done?.status ?? 'REVIEW',
     project_id: String(project.ref),
     parent_id: String(settings.parent),
     ...REQUIRED_FLAG_DEFAULTS,
