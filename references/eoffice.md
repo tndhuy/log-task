@@ -48,10 +48,14 @@ with no new work appear as "nothing new".
    by the child), and set `project` from the target's `params.project`.
 2. Run `node scripts/eoffice-write.mjs create-task --dry-run <tasks.json>`.
    Show the complete preview and obtain explicit approval immediately before
-   the real create operation.
+   the real create operation. The dry-run validates input and the local form
+   map only; it does not contact eOffice, so an unknown Project is not caught
+   here.
 3. Run `node scripts/eoffice-write.mjs create-task <tasks.json>`. Parse the last
-   output line as `{ taskName, submitted, externalLink?, error? }[]`. Stop and
-   report failures; do not retry with altered data.
+   output line as `{ taskName, submitted, externalLink?, error? }[]`. Report
+   each failure by task name (an unknown Project appears here, per task); do not
+   retry with altered data. Continue to the Gate 2 report preview for the tasks
+   that were created successfully; failed tasks are not ledgered.
 4. Build a separate report JSON containing only completed tasks, with
    `project`, `taskName`, `reportDate`, `progress: "100"`, and `description`.
 5. Run `node scripts/eoffice-write.mjs report-progress --dry-run <reports.json>`.

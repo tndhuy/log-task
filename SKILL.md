@@ -11,12 +11,16 @@ to be in a hurry.
 
 ## Step 1: Resolve the project
 
-Run, from the skill directory:
+Run the script by absolute path from the user's own working directory
+(`<skill-dir>` is the directory containing this SKILL.md). Do not `cd` into the
+skill directory first; the script locates its skill directory itself:
 
-    node scripts/resolve-project.mjs resolve --cwd "$(pwd)"
+    node <skill-dir>/scripts/resolve-project.mjs resolve --cwd "$(pwd)"
 
 On exit code 2, show the stderr message and stop. If it says no project is
-configured, show the user this template to add to `projects.json`:
+configured, or that `projects.json` was not found, show the user this template
+to add to `projects.json` (when the file is missing, the user creates it from
+`projects.json.example`; never create or guess the file yourself):
 
     "<absolute-path-to-project-root>": {
       "platform": "eoffice" | "lark" | "manual",
@@ -38,8 +42,8 @@ or, for a workspace holding several repos (eOffice only):
 
 Never guess a platform for an unlisted project.
 
-The JSON on stdout has `mode` (`standalone`, `group-run`, or `child-run`) and
-`targets`. Each target has `name`, `path`, `platform`, `gitEmails`, `params`,
+The JSON on stdout has `mode` (`standalone`, `group-run`, or `child-run`),
+`key`, `groupRoot` and `logRoot` (both null for standalone), and `targets`. Each target has `name`, `path`, `platform`, `gitEmails`, `params`,
 and `ledgerPath`. Steps 2-4 run once per target; in `group-run`, Steps 5-7 run
 once for the whole group (see "Group runs" below).
 
@@ -47,12 +51,16 @@ once for the whole group (see "Group runs" below).
 
 If `mode` is `group-run` or `child-run`, first run:
 
-    node scripts/resolve-project.mjs migration-plan --cwd "$(pwd)"
+    node <skill-dir>/scripts/resolve-project.mjs migration-plan --cwd "$(pwd)"
+
+(again by absolute path, without `cd` into the skill directory)
 
 If `moves` is non-empty or `legacyRoot` is set, show the list and wait for
 approval. Then, for each approved move whose `conflict` is `false`, run
 `mv -n <from> <to>` after `mkdir -p` of the destination's directory. A move
-with `conflict: true` is never executed; stop and ask. A `legacyRoot` ledger
+with `conflict: true` is never executed; stop and ask. If the user declines a
+planned move, stop: a run must not start from an empty ledger for a child whose
+old ledger exists. A `legacyRoot` ledger
 matches no child: ask whether to leave it or move it to
 `<logRoot>/ledger/_legacy-root.json`; its fingerprints are never applied to a
 child automatically.
@@ -150,8 +158,10 @@ dropped it (fingerprint match vs. commit-subset match, and which ledger
 entry/fingerprint it matched) -- never drop one silently. If, after this
 pass, no candidates remain, report "nothing new to log" (including the
 dropped-candidate list, mirroring nova's own task-log convention of an
-explicit "excluded because already logged" section) and stop -- never
-produce an empty draft.
+explicit "excluded because already logged" section) -- never produce an
+empty draft. In a group-run, record "nothing new" for this target and continue
+with the next target; stop only when no target has new candidates (see "Group
+runs"). In a standalone or child-run, stop here.
 
 ## Step 5: Format the draft
 
@@ -185,10 +195,15 @@ Applies when Step 1 returns `mode: "group-run"`. `child-run` follows the normal
   `references/eoffice.md`, showing each target's `params.project`. List
   targets with nothing new as "nothing new". After approval, save the draft to
   `<logRoot>/drafts/<window-start>_<window-end>_<HHmmss>.md` (never overwrite).
+  This draft save and the `.gitignore` prompt below apply to any run with a
+  non-null `groupRoot` (group-run and child-run).
 - Step 7: follow `references/eoffice.md` "Write procedure" with each task's
   `project` taken from its target. Keep the two gates separate. If
   `create-task --dry-run` fails for any target, stop the whole batch before any
-  real create and name the failing target. Append a task to its **own target's**
+  real create and name the failing target. The dry-run checks input and the
+  local form map only; it does not contact eOffice, so an unknown Project
+  surfaces at the real create as a per-task failure: report it by task name,
+  never retry with altered data, and ledger only confirmed tasks. Append a task to its **own target's**
   ledger only after every required step for that task succeeded; a failure in
   one target does not block ledgering the others.
 - Ledger writes use a temp file + rename, as always.

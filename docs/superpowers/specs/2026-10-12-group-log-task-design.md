@@ -109,9 +109,12 @@ Steps 2–4 run once per child; Steps 5–7 run once for the whole group.
 7. Write, using the existing eOffice procedure with one change: the task JSON
    batches carry each task's child `project`. The two gates stay separate:
    - **Gate 1**: `create-task --dry-run` for the whole batch, then approval,
-     then real run. If the dry-run fails for any child (e.g. its eOffice
-     Project is not found), stop the whole batch before any real create and
-     name the failing child; a failed dry-run means nothing was created.
+     then real run. The dry-run validates input and the local form map
+     only (it does not contact eOffice). If it fails for any child, stop the
+     whole batch before any real create and name the failing child. An unknown
+     eOffice Project is not caught by the dry-run: it surfaces at the real
+     create as a per-task failure, reported by task name, never retried with
+     altered data; only confirmed tasks are ledgered.
    - **Gate 2**: `report-progress --dry-run`, separate approval, real run.
    Append a task to its **child's** ledger only after all required steps for
    that task succeed. A failure in one child does not block ledgering the

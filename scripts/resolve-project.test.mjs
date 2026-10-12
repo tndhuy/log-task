@@ -74,3 +74,38 @@ test('an unknown subcommand exits 2 with usage', () => {
   assert.equal(r.status, 2);
   assert.match(r.stderr, /Usage/);
 });
+
+function assertCleanExit2(r, phrase) {
+  assert.equal(r.status, 2, r.stderr);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr.trim().split('\n').length, 1, r.stderr);
+  assert.match(r.stderr, phrase);
+}
+
+test('a missing config file exits 2 with a one-line message', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lt-cfg-'));
+  const r = run(['resolve', '--cwd', dir, '--config', join(dir, 'nope.json')]);
+  assertCleanExit2(r, /projects\.json not found/);
+});
+
+test('an invalid JSON config exits 2 with a one-line message', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lt-cfg-'));
+  const bad = join(dir, 'projects.json');
+  writeFileSync(bad, '{ not json');
+  const r = run(['resolve', '--cwd', dir, '--config', bad]);
+  assertCleanExit2(r, /invalid JSON/);
+});
+
+test('a trailing --cwd exits 2 with usage', () => {
+  const r = run(['resolve', '--cwd']);
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, '');
+  assert.match(r.stderr, /Usage/);
+});
+
+test('--cwd followed by another flag exits 2 with usage', () => {
+  const r = run(['resolve', '--cwd', '--config', 'x']);
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, '');
+  assert.match(r.stderr, /Usage/);
+});

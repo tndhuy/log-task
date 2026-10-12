@@ -10,7 +10,25 @@ const USAGE = 'Usage: resolve-project.mjs <resolve|migration-plan> [--cwd <dir>]
 
 function option(args, flag, fallback) {
   const i = args.indexOf(flag);
-  return i === -1 ? fallback : args[i + 1];
+  if (i === -1) return fallback;
+  const value = args[i + 1];
+  if (value === undefined || value.startsWith('--')) return null;
+  return value;
+}
+
+function loadConfig(configPath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(configPath, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') throw new ConfigError(`projects.json not found at ${configPath}`);
+    throw err;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new ConfigError(`invalid JSON in ${configPath}: ${err.message}`);
+  }
 }
 
 function assertChildrenOnDisk(resolved) {
@@ -33,8 +51,12 @@ function main(argv) {
   }
   const cwd = option(rest, '--cwd', process.cwd());
   const configPath = option(rest, '--config', path.join(skillDir, 'projects.json'));
+  if (cwd === null || configPath === null) {
+    console.error(USAGE);
+    return 2;
+  }
   try {
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const config = loadConfig(configPath);
     const resolved = resolveProject(config, cwd, { skillDir });
     assertChildrenOnDisk(resolved);
     const output = command === 'resolve' ? resolved : planLedgerMigration(resolved, { skillDir });
