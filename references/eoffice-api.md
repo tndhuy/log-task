@@ -2,6 +2,24 @@
 
 Creates tasks through the `work-normal-normal` API. Credentials come only from
 `EOFFICE_BASE_URL` and `EOFFICE_ACCESS_TOKEN`; the agent never reads `.env`.
+Optional `EOFFICE_SESSION_COOKIE` (a browser session cookie, passed inline, never
+stored) enables the progress-report record, which the integration API cannot create.
+
+## Verified write flow (UAT)
+
+Per task: `insert` (no `status`; enums as display values; people as **usernames**;
+`project_id` = project code) → wait 3 s → ONE of:
+- with `EOFFICE_SESSION_COOKIE`: `POST /work-task-task/progress` (CSRF taken from the
+  `csrf-token-cache` response header of a `reloadCsrfToken=1` request). This writes the
+  report record (date, reporter, 100%, note).
+- without it: exactly one `update` with `ID` and `status="Đang đánh giá"`
+  (REVIEW, 100%, actual dates filled, but no report record).
+Every further `update` wipes the actual dates; never add one. The server also refuses reports (and hides the UI button) on subtasks and on tasks that
+have subtasks, so the CLI sends a status update for those and a report only for a task
+with no children that is not itself a child (verified on UAT: 14113 reported, 14119 not).
+A task that is already
+REVIEW refuses a progress report ("không có quyền"). Tasks without an assignee trigger
+an automatic warning, so the CLI refuses empty `assignees`.
 The user runs, or approves running, every command with
 `node --env-file=<path-to-env-file> <script> ...`.
 
@@ -17,8 +35,8 @@ replace the group's per top-level key (a child `done` replaces the whole group `
   "parent":    { "mode": "ask", "remember": true, "candidates": [
                   { "id": 2089469, "label": "OneNova -P5- Development" },
                   { "id": 2087612, "label": "05. One Nova - Phase 5 CDS thư ký - Điểm danh cuộc họp" } ] },
-  "owner":     { "mode": "ask", "default": "<your full name>", "remember": true },
-  "assignees": { "mode": "ask", "default": ["<your full name>", "<colleague full name>"], "remember": true },
+  "owner":     { "mode": "ask", "default": "<your username>", "remember": true },
+  "assignees": { "mode": "ask", "default": ["<your username>", "<colleague username>"], "remember": true },
   "followers": { "mode": "fixed", "value": [] },
   "dates":     { "actualFromPlan": true },
   "done":      { "status": "REVIEW" }
@@ -76,7 +94,13 @@ target host. Only `Done` tasks may be created.
    rules. `settings.parent` is required after that merge; the CLI exits 2 without it.
    Each task in `tasks` needs `summary` (required) and may have `layer` (overrides
    the fixed `rules.layer`) and `startPlan`, `endPlan`, `start`, `end` as
-   `YYYY-MM-DD`; unknown keys are ignored. `project.ref` comes from
+   `YYYY-MM-DD`; unknown keys are ignored. A task may carry `children: [{ summary, layer?,
+   startPlan, endPlan, start, end, note? }]` (one level only; nested children are rejected, exit 2): each child is created under the
+   new task (same project, people and name template, `layer` inherited from the parent
+   task unless set). Children are finished before the parent. Results nest as
+   `children: [...]`; if the parent fails its children are reported as not created; on a
+   rerun an existing parent/child is skipped as "already exists" and missing children are
+   added. Ledger the parent task; a child is ledgered only when its own `submitted` is true. `project.ref` comes from
    `params.projectRef` and `project.id` from `params.projectId`.
    Create a temp directory outside the repo (for example with `mktemp -d`) for
    `batch.json`, `rules.json` and `settings.json`, and delete it after the run;
@@ -110,8 +134,10 @@ target host. Only `Done` tasks may be created.
    TARGET; run `create --dry-run` for EVERY target first and stop the whole group
    if any dry-run fails; only then run `--apply` per target, each needing its own
    approval naming the host.
-9. If UAT shows a status-only route does not reach `percent=100`, run the
-   existing `eoffice` `report-progress` flow (separate approval) for the created tasks.
+9. The result of each task carries `report` (`progress-report` or `status-update-only`),
+   plus the read-back `status` and `percent`. A task reported as `created: true` with
+   `error: "created but not finished: ..."` exists but the report or status step failed:
+   do not rerun `--apply` (the duplicate guard would skip it); finish it in the UI.
 
 ## Errors
 

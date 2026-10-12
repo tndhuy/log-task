@@ -53,8 +53,8 @@
           "parent":    { "mode": "ask", "remember": true, "candidates": [
                           { "id": 2089469, "label": "OneNova -P5- Development" },
                           { "id": 2087612, "label": "05. One Nova - Phase 5 CDS thư ký - Điểm danh cuộc họp" } ] },
-          "owner":     { "mode": "ask", "default": "<your full name>", "remember": true },
-          "assignees": { "mode": "ask", "default": ["<your full name>", "<colleague full name>"], "remember": true },
+          "owner":     { "mode": "ask", "default": "<your username>", "remember": true },
+          "assignees": { "mode": "ask", "default": ["<your username>", "<colleague username>"], "remember": true },
           "followers": { "mode": "fixed", "value": [] },
           "dates":     { "actualFromPlan": true },
           "done":      { "status": "REVIEW" }

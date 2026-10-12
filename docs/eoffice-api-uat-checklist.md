@@ -8,14 +8,15 @@ host and a UAT token with write permission on `work-normal-normal`.
 - [ ] `create --apply` inserts one task; it appears in the UAT UI with the
       right title, parent, owner, assignees, and dates.
 - [ ] Date format `dd/mm/YYYY` accepted by `insert`.
-- [ ] `project_id` accepts the project code or the raw ID (record which; set
-      `params.projectRef` accordingly).
-- [ ] Full names in `owner_ids` and `assign_ids` resolve to the right people.
-- [ ] The seven required flags at their defaults are accepted.
-- [ ] Status route: with `status=REVIEW`, does the task reach `percent=100`?
-      If not, try `status=COMPLETED`, then `progress_type=TIMEFINISH`. If none
-      works, use the Playwright `report-progress` step.
-- [ ] `update` takes `id` (the docs table lists no `id` row).
+- [x] `project_id` = project code (verified on UAT); `params.projectRef` holds it.
+- [x] `owner_ids` / `assign_ids` take usernames only (full names do not resolve).
+- [x] The four display-value flags at their defaults are accepted.
+- [x] Status: one `update` with `ID` and `status="Đang đánh giá"` gives REVIEW/100%
+      with actual dates; any further `update` wipes them.
+- [x] `POST /work-task-task/progress` with session cookie + CSRF writes the report
+      (task 14114, UAT); a REVIEW task refuses it.
+- [ ] Run the real CLI on UAT with and without `EOFFICE_SESSION_COOKIE` and compare in the UI.
+- [ ] Confirm the owner/assignee usernames on production before the supervised task.
 - [ ] A second `create --apply` of the same batch skips the task as already existing.
 - [ ] The `insert` response shape (record it; the CLI confirms by read-back).
 
