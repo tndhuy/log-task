@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   RulesError, REQUIRED_FLAG_DEFAULTS, validateRules, renderName, toApiDate,
   buildInsertPayload, settingsPlan, pickRemembered,
-} from './eoffice-rules.mjs';
+} from '../../../skills/log-task/scripts/lib/eoffice-rules.mjs';
 
 const rules = () => ({
   nameTemplate: '[NVG.ITD - CDS Tập Đoàn] - One Nova - {layer} - [{layer}] {summary}',

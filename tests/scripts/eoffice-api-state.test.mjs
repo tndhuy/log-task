@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const cli = join(dirname(fileURLToPath(import.meta.url)), 'eoffice-api-state.mjs');
+const cli = join(dirname(fileURLToPath(import.meta.url)), '../../skills/log-task/scripts/eoffice-api-state.mjs');
 const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
 
 const rules = {

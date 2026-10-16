@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planLedgerMigration } from './ledger-migration.mjs';
-import { resolveProject } from './resolve-project.mjs';
+import { planLedgerMigration } from '../../../skills/log-task/scripts/lib/ledger-migration.mjs';
+import { resolveProject } from '../../../skills/log-task/scripts/lib/resolve-project.mjs';
 
 const skillDir = '/skill';
 const config = {

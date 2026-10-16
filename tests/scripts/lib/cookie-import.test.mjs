@@ -12,7 +12,7 @@ import {
   BROWSER_NAMES,
   domainsFor,
   cookieHeader,
-} from './cookie-import.mjs';
+} from '../../../skills/log-task/scripts/lib/cookie-import.mjs';
 
 function encryptForFixture(plainValue, key) {
   const iv = Buffer.alloc(16, 0x20); // Chromium's cookie store uses 16 space chars as IV

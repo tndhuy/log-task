@@ -1,14 +1,12 @@
 {
   "name": "log-task",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Personal skill: log completed work into a project's declared platform (eoffice, lark, or manual).",
+  "description": "Agent skill: log completed work into a project's declared platform (eoffice-api, lark, or manual).",
+  "license": "MIT",
+  "engines": { "node": ">=22.13" },
   "scripts": {
-    "test": "node --test scripts/*.test.mjs scripts/**/*.test.mjs"
-  },
-  "dependencies": {
-    "better-sqlite3": "^11.3.0",
-    "playwright": "^1.47.0"
+    "test": "node --no-warnings --test \"tests/**/*.test.mjs\""
   }
 }

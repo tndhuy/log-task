@@ -31,7 +31,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -110,9 +110,7 @@ function getCookieDbPath(profile, browser) {
 
 function openDb(dbPath) {
   try {
-    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
-    db.defaultSafeIntegers(true);
-    return db;
+    return new DatabaseSync(dbPath, { readOnly: true });
   } catch (err) {
     if (String(err.message).includes('SQLITE_BUSY') || String(err.message).includes('locked')) {
       return openDbFromCopy(dbPath);
@@ -128,8 +126,7 @@ function openDbFromCopy(dbPath) {
     for (const suffix of ['-wal', '-shm']) {
       if (fs.existsSync(dbPath + suffix)) fs.copyFileSync(dbPath + suffix, tmpPath + suffix);
     }
-    const db = new Database(tmpPath, { readonly: true, fileMustExist: true });
-    db.defaultSafeIntegers(true);
+    const db = new DatabaseSync(tmpPath, { readOnly: true });
     const origClose = db.close.bind(db);
     db.close = () => {
       origClose();
@@ -279,14 +276,19 @@ export function importCookies(domains, profile = 'Default', browserName = 'chrom
   try {
     const now = chromiumNow();
     const placeholders = domains.map(() => '?').join(',');
-    const rows = db.prepare(
+    const query = db.prepare(
       `SELECT host_key, name, value, encrypted_value, path, expires_utc,
               is_secure, is_httponly, has_expires, samesite
        FROM cookies
        WHERE host_key IN (${placeholders})
          AND (has_expires = 0 OR expires_utc > ?)
        ORDER BY host_key, name`
-    ).all(...domains, now);
+    );
+    query.setReadBigInts(true);
+    const rows = query.all(...domains, now).map((row) => ({
+      ...row,
+      encrypted_value: Buffer.from(row.encrypted_value),
+    }));
     return decryptRows(rows, keys);
   } finally {
     db.close();

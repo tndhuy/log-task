@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const cli = join(dirname(fileURLToPath(import.meta.url)), 'eoffice-api-write.mjs');
+const cli = join(dirname(fileURLToPath(import.meta.url)), '../../skills/log-task/scripts/eoffice-api-write.mjs');
 const TOKEN = 'secret-token';
 
 async function startServer() {

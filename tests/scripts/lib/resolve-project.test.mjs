@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ledgerKey, resolveProject, assertSingleOwner, ConfigError,
-} from './resolve-project.mjs';
+} from '../../../skills/log-task/scripts/lib/resolve-project.mjs';
 
 const skillDir = '/skill';
 const config = () => ({

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   EofficeApiError, createClient, findParents, findDuplicate, insertTask, isUatHost,
-} from './eoffice-api.mjs';
+} from '../../../skills/log-task/scripts/lib/eoffice-api.mjs';
 
 const TOKEN = 'secret-token-123';
 
