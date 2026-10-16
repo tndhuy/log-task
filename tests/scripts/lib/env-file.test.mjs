@@ -11,14 +11,25 @@ const lib = fileURLToPath(new URL('../../../skills/log-task/scripts/lib/env-file
 
 test('returns null and loads nothing when the file is missing', () => {
   const loaded = [];
-  const result = loadDefaultEnv({ dataDir: '/d', exists: () => false, load: (f) => loaded.push(f) });
+  const result = loadDefaultEnv({ dataDir: '/d', exists: () => false, load: (f) => loaded.push(f), execArgv: [] });
   assert.equal(result, null);
+  assert.deepEqual(loaded, []);
+});
+
+test('skips the default file when node was started with --env-file', () => {
+  const loaded = [];
+  for (const arg of ['--env-file=/p/prod.env', '--env-file']) {
+    const result = loadDefaultEnv({
+      dataDir: '/d', exists: () => true, load: (f) => loaded.push(f), execArgv: [arg],
+    });
+    assert.equal(result, null);
+  }
   assert.deepEqual(loaded, []);
 });
 
 test('loads <dataDir>/eoffice.env when it exists', () => {
   const loaded = [];
-  const result = loadDefaultEnv({ dataDir: '/d', exists: () => true, load: (f) => loaded.push(f) });
+  const result = loadDefaultEnv({ dataDir: '/d', exists: () => true, load: (f) => loaded.push(f), execArgv: [] });
   assert.equal(result, `/d/${DEFAULT_ENV_FILE}`);
   assert.deepEqual(loaded, [`/d/${DEFAULT_ENV_FILE}`]);
 });

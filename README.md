@@ -57,7 +57,7 @@ the skill directory, so updates never overwrite it.
    | `EOFFICE_SETTLE_MS` | no | Pause between API steps, default 3000 |
 
    Variables already exported in your shell win over the file. To target another
-   environment, pass a second file as two words: `node --env-file "$HOME/prod.env" ...`
+   environment, pass that file as two words; it then replaces the default file entirely: `node --env-file "$HOME/prod.env" ...`
    (`--env-file=~/prod.env` is not expanded by the shell). Values in env files must be
    absolute paths or plain text, never `~`.
    The agent never reads these files, and tokens and cookies are never printed or stored.
