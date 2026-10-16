@@ -32,7 +32,7 @@ outside the skill directory, so updates never overwrite it.
    for a workspace folder that holds several repos. `gitEmails` selects which
    commits are yours.
 
-3. For `eoffice-api` projects, copy `assets/.env.example` to a private file, fill in
+3. For `eoffice-api` projects, copy `~/.claude/skills/log-task/assets/env.example` to a private file, fill in
    `EOFFICE_BASE_URL` and `EOFFICE_ACCESS_TOKEN`, and pass it to the commands the
    skill proposes with `node --env-file=<path>`. The agent never reads that file.
 

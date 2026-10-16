@@ -7,7 +7,7 @@ skills/log-task/        the installable skill (what `npx skills add` copies)
   SKILL.md              the agent procedure
   scripts/              CLIs and libraries the procedure calls
   references/           one file per platform
-assets/                 example config files copied by users
+  assets/               example config files users copy
 tests/                  mirrors scripts/ (node --test)
 docs/uat-checklist.md   manual checks to run against UAT before production
 ```
