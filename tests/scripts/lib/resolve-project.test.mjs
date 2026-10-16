@@ -4,7 +4,7 @@ import {
   ledgerKey, resolveProject, assertSingleOwner, ConfigError,
 } from '../../../skills/log-task/scripts/lib/resolve-project.mjs';
 
-const skillDir = '/skill';
+const dataDir = '/skill';
 const config = () => ({
   '/w/nova': {
     type: 'group',
@@ -24,7 +24,7 @@ test('ledgerKey strips the leading slash and joins with dashes', () => {
 });
 
 test('standalone entry keeps the skill-dir ledger', () => {
-  const r = resolveProject(config(), '/w/solo/src', { skillDir });
+  const r = resolveProject(config(), '/w/solo/src', { dataDir });
   assert.equal(r.mode, 'standalone');
   assert.equal(r.groupRoot, null);
   assert.equal(r.targets.length, 1);
@@ -33,7 +33,7 @@ test('standalone entry keeps the skill-dir ledger', () => {
 });
 
 test('group root resolves to every child with merged config', () => {
-  const r = resolveProject(config(), '/w/nova', { skillDir });
+  const r = resolveProject(config(), '/w/nova', { dataDir });
   assert.equal(r.mode, 'group-run');
   assert.equal(r.groupRoot, '/w/nova');
   assert.equal(r.logRoot, '/w/nova/.log-task');
@@ -48,14 +48,14 @@ test('group root resolves to every child with merged config', () => {
 });
 
 test('cwd inside a child resolves to that child only', () => {
-  const r = resolveProject(config(), '/w/nova/web/src', { skillDir });
+  const r = resolveProject(config(), '/w/nova/web/src', { dataDir });
   assert.equal(r.mode, 'child-run');
   assert.deepEqual(r.targets.map((t) => t.name), ['web']);
   assert.equal(r.targets[0].ledgerPath, '/w/nova/.log-task/ledger/web.json');
 });
 
 test('cwd in an unrelated subdir of the group root is a group run', () => {
-  const r = resolveProject(config(), '/w/nova/docs', { skillDir });
+  const r = resolveProject(config(), '/w/nova/docs', { dataDir });
   assert.equal(r.mode, 'group-run');
   assert.equal(r.targets.length, 2);
 });
@@ -63,7 +63,7 @@ test('cwd in an unrelated subdir of the group root is a group run', () => {
 test('logDir override is resolved against the group root', () => {
   const c = config();
   c['/w/nova'].logDir = 'state/logs';
-  const r = resolveProject(c, '/w/nova', { skillDir });
+  const r = resolveProject(c, '/w/nova', { dataDir });
   assert.equal(r.logRoot, '/w/nova/state/logs');
   assert.equal(r.targets[0].ledgerPath, '/w/nova/state/logs/ledger/api.json');
 });
@@ -71,7 +71,7 @@ test('logDir override is resolved against the group root', () => {
 test('nested child path becomes a dashed ledger key', () => {
   const c = config();
   c['/w/nova'].children['svc/v2'] = { params: { project: 'V2' } };
-  const r = resolveProject(c, '/w/nova', { skillDir });
+  const r = resolveProject(c, '/w/nova', { dataDir });
   const v2 = r.targets.find((t) => t.name === 'svc/v2');
   assert.equal(v2.ledgerPath, '/w/nova/.log-task/ledger/svc-v2.json');
 });
@@ -79,26 +79,26 @@ test('nested child path becomes a dashed ledger key', () => {
 test('child declared as ./api or api/ resolves to the same path', () => {
   const c = config();
   c['/w/nova'].children = { './api/': { params: { project: 'API' } } };
-  const r = resolveProject(c, '/w/nova', { skillDir });
+  const r = resolveProject(c, '/w/nova', { dataDir });
   assert.equal(r.targets[0].path, '/w/nova/api');
 });
 
 test('a string-prefix lookalike directory does not match the group', () => {
   assert.throws(
-    () => resolveProject(config(), '/w/nova-extra', { skillDir }),
+    () => resolveProject(config(), '/w/nova-extra', { dataDir }),
     ConfigError,
   );
 });
 
 test('unlisted cwd throws ConfigError', () => {
-  assert.throws(() => resolveProject(config(), '/elsewhere', { skillDir }), ConfigError);
+  assert.throws(() => resolveProject(config(), '/elsewhere', { dataDir }), ConfigError);
 });
 
 test('child without params.project throws and names the child', () => {
   const c = config();
   c['/w/nova'].children.api = { params: {} };
   assert.throws(
-    () => resolveProject(c, '/w/nova', { skillDir }),
+    () => resolveProject(c, '/w/nova', { dataDir }),
     (e) => e instanceof ConfigError && e.message.includes('api'),
   );
 });
@@ -106,13 +106,13 @@ test('child without params.project throws and names the child', () => {
 test('blank params.project is rejected', () => {
   const c = config();
   c['/w/nova'].children.api = { params: { project: '  ' } };
-  assert.throws(() => resolveProject(c, '/w/nova', { skillDir }), ConfigError);
+  assert.throws(() => resolveProject(c, '/w/nova', { dataDir }), ConfigError);
 });
 
 test('child-run does not fail on an unrelated child missing params.project', () => {
   const c = config();
   c['/w/nova'].children.api = { params: {} };
-  const r = resolveProject(c, '/w/nova/web', { skillDir });
+  const r = resolveProject(c, '/w/nova/web', { dataDir });
   assert.equal(r.mode, 'child-run');
 });
 
@@ -120,7 +120,7 @@ test('group with no children throws and names the group', () => {
   const c = config();
   c['/w/nova'].children = {};
   assert.throws(
-    () => resolveProject(c, '/w/nova', { skillDir }),
+    () => resolveProject(c, '/w/nova', { dataDir }),
     (e) => e instanceof ConfigError && e.message.includes('/w/nova'),
   );
 });
@@ -139,7 +139,7 @@ test('group child merges rules per top-level key and gets a statePath', () => {
   const c = config();
   c['/w/nova'].rules = { nameTemplate: 'T {summary}', done: { status: 'REVIEW' } };
   c['/w/nova'].children.api.rules = { done: { status: 'COMPLETED' } };
-  const r = resolveProject(c, '/w/nova', { skillDir });
+  const r = resolveProject(c, '/w/nova', { dataDir });
   const [api, web] = r.targets;
   assert.deepEqual(api.rules, { nameTemplate: 'T {summary}', done: { status: 'COMPLETED' } });
   assert.deepEqual(web.rules, { nameTemplate: 'T {summary}', done: { status: 'REVIEW' } });
@@ -148,14 +148,14 @@ test('group child merges rules per top-level key and gets a statePath', () => {
 });
 
 test('group child without any rules gets an empty rules object', () => {
-  const r = resolveProject(config(), '/w/nova', { skillDir });
+  const r = resolveProject(config(), '/w/nova', { dataDir });
   assert.deepEqual(r.targets[0].rules, {});
 });
 
 test('standalone target carries its rules and a skill-dir statePath', () => {
   const c = config();
   c['/w/solo'].rules = { nameTemplate: '{summary}' };
-  const r = resolveProject(c, '/w/solo', { skillDir });
+  const r = resolveProject(c, '/w/solo', { dataDir });
   assert.deepEqual(r.targets[0].rules, { nameTemplate: '{summary}' });
   assert.equal(r.targets[0].statePath, '/skill/state/w-solo.json');
 });

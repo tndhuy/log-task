@@ -2,11 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ledgerKey } from './resolve-project.mjs';
 
-export function planLedgerMigration(resolved, { skillDir, exists = fs.existsSync }) {
+export function planLedgerMigration(resolved, { dataDir, exists = fs.existsSync }) {
   if (resolved.mode === 'standalone') {
     return { moves: [], legacyRoot: null };
   }
-  const oldLedger = (absPath) => path.join(skillDir, 'ledger', `${ledgerKey(absPath)}.json`);
+  const oldLedger = (absPath) => path.join(dataDir, 'ledger', `${ledgerKey(absPath)}.json`);
 
   const moves = [];
   for (const target of resolved.targets) {

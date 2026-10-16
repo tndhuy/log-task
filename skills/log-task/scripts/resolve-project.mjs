@@ -4,8 +4,10 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveProject, ConfigError } from './lib/resolve-project.mjs';
 import { planLedgerMigration } from './lib/ledger-migration.mjs';
+import { resolveDataDir } from './lib/data-dir.mjs';
 
 const skillDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const dataDir = resolveDataDir({ skillDir });
 const USAGE = 'Usage: resolve-project.mjs <resolve|migration-plan> [--cwd <dir>] [--config <file>]';
 
 function option(args, flag, fallback) {
@@ -50,16 +52,16 @@ function main(argv) {
     return 2;
   }
   const cwd = option(rest, '--cwd', process.cwd());
-  const configPath = option(rest, '--config', path.join(skillDir, 'projects.json'));
+  const configPath = option(rest, '--config', path.join(dataDir, 'projects.json'));
   if (cwd === null || configPath === null) {
     console.error(USAGE);
     return 2;
   }
   try {
     const config = loadConfig(configPath);
-    const resolved = resolveProject(config, cwd, { skillDir });
+    const resolved = resolveProject(config, cwd, { dataDir });
     assertChildrenOnDisk(resolved);
-    const output = command === 'resolve' ? resolved : planLedgerMigration(resolved, { skillDir });
+    const output = command === 'resolve' ? resolved : planLedgerMigration(resolved, { dataDir });
     console.log(JSON.stringify(output, null, 2));
     return 0;
   } catch (err) {

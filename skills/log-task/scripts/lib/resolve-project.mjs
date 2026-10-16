@@ -56,7 +56,7 @@ function buildChild(groupKey, group, name, logRoot) {
   };
 }
 
-export function resolveProject(config, cwd, { skillDir }) {
+export function resolveProject(config, cwd, { dataDir }) {
   assertSingleOwner(config);
   const matching = Object.keys(config).filter((key) => isInside(key, cwd));
   if (matching.length === 0) {
@@ -77,9 +77,9 @@ export function resolveProject(config, cwd, { skillDir }) {
         platform: entry.platform,
         gitEmails: entry.gitEmails ?? [],
         params: entry.params ?? {},
-        ledgerPath: path.join(skillDir, 'ledger', `${ledgerKey(key)}.json`),
+        ledgerPath: path.join(dataDir, 'ledger', `${ledgerKey(key)}.json`),
         rules: entry.rules ?? {},
-        statePath: path.join(skillDir, 'state', `${ledgerKey(key)}.json`),
+        statePath: path.join(dataDir, 'state', `${ledgerKey(key)}.json`),
       }],
     };
   }

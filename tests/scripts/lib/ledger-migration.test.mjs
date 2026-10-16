@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { planLedgerMigration } from '../../../skills/log-task/scripts/lib/ledger-migration.mjs';
 import { resolveProject } from '../../../skills/log-task/scripts/lib/resolve-project.mjs';
 
-const skillDir = '/skill';
+const dataDir = '/skill';
 const config = {
   '/w/nova': {
     type: 'group',
@@ -16,9 +16,9 @@ const config = {
 const existsIn = (files) => (p) => files.includes(p);
 
 test('plans a move for each child with an old skill-dir ledger', () => {
-  const resolved = resolveProject(config, '/w/nova', { skillDir });
+  const resolved = resolveProject(config, '/w/nova', { dataDir });
   const plan = planLedgerMigration(resolved, {
-    skillDir,
+    dataDir,
     exists: existsIn(['/skill/ledger/w-nova-api.json']),
   });
   assert.deepEqual(plan.moves, [{
@@ -30,9 +30,9 @@ test('plans a move for each child with an old skill-dir ledger', () => {
 });
 
 test('flags a conflict when the destination already exists', () => {
-  const resolved = resolveProject(config, '/w/nova', { skillDir });
+  const resolved = resolveProject(config, '/w/nova', { dataDir });
   const plan = planLedgerMigration(resolved, {
-    skillDir,
+    dataDir,
     exists: existsIn([
       '/skill/ledger/w-nova-web.json',
       '/w/nova/.log-task/ledger/web.json',
@@ -42,9 +42,9 @@ test('flags a conflict when the destination already exists', () => {
 });
 
 test('reports a legacy ledger keyed by the group root', () => {
-  const resolved = resolveProject(config, '/w/nova', { skillDir });
+  const resolved = resolveProject(config, '/w/nova', { dataDir });
   const plan = planLedgerMigration(resolved, {
-    skillDir,
+    dataDir,
     exists: existsIn(['/skill/ledger/w-nova.json']),
   });
   assert.deepEqual(plan.moves, []);
@@ -52,9 +52,9 @@ test('reports a legacy ledger keyed by the group root', () => {
 });
 
 test('a child run only plans for its own child', () => {
-  const resolved = resolveProject(config, '/w/nova/web', { skillDir });
+  const resolved = resolveProject(config, '/w/nova/web', { dataDir });
   const plan = planLedgerMigration(resolved, {
-    skillDir,
+    dataDir,
     exists: existsIn(['/skill/ledger/w-nova-api.json', '/skill/ledger/w-nova-web.json']),
   });
   assert.deepEqual(plan.moves.map((m) => m.to), ['/w/nova/.log-task/ledger/web.json']);
@@ -64,9 +64,9 @@ test('standalone projects have nothing to migrate', () => {
   const resolved = resolveProject(
     { '/w/solo': { platform: 'manual', gitEmails: [], params: {} } },
     '/w/solo',
-    { skillDir },
+    { dataDir },
   );
-  assert.deepEqual(planLedgerMigration(resolved, { skillDir, exists: () => true }), {
+  assert.deepEqual(planLedgerMigration(resolved, { dataDir, exists: () => true }), {
     moves: [],
     legacyRoot: null,
   });
