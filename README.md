@@ -5,17 +5,24 @@ checkpoints) into task records on the platform each project declares:
 **eOffice** (API), **Lark Base**, or a **manual** markdown file. Invoke it with
 `/log-task`. Nothing is written until you approve the draft.
 
+## Requirements
+
+- Node.js 22.13 or newer and `git`. No `npm install` is needed.
+- An agent that supports skills (Claude Code, Codex, Cursor, ...).
+- `eoffice-api`: an eOffice `access_token` with rights on the `work-normal-normal`
+  object, issued by your eOffice admin. For the progress-report record, also be
+  signed in to eOffice in Brave or Chrome (cookies are read from the macOS Keychain).
+- `lark`: a Lark Base `baseToken` and `tableId`. `manual`: nothing extra.
+
 ## Install
 
-Requires Node.js 22.13 or newer. No `npm install` is needed.
-
 ```bash
-npx skills add tndhuy/log-task            # interactive: pick your agents
+npx skills add tndhuy/log-task                        # interactive: pick your agents
 npx skills add tndhuy/log-task -a claude-code -g -y   # Claude Code, all projects, no prompts
 ```
 
-Update later with `npx skills update log-task`. Your configuration is stored
-outside the skill directory, so updates never overwrite it.
+Update later with `npx skills update log-task`. Your configuration lives outside
+the skill directory, so updates never overwrite it.
 
 ## Configure (once, about 5 minutes)
 
@@ -29,19 +36,39 @@ outside the skill directory, so updates never overwrite it.
    Set `LOG_TASK_HOME` to use a different directory.
 
 2. Edit `projects.json`: one entry per project, or one `"type": "group"` entry
-   for a workspace folder that holds several repos. `gitEmails` selects which
-   commits are yours.
+   for a workspace folder that holds several repos.
+   - `platform`: `eoffice-api`, `lark` or `manual`.
+   - `gitEmails`: the emails on your commits. A wrong email finds no work.
+   - `eoffice-api` repos also need `rules` (task name template, project
+     `projectRef`/`projectId`, parent candidates, assignee usernames).
 
-3. For `eoffice-api` projects, copy `~/.claude/skills/log-task/assets/env.example` to a private file, fill in
-   `EOFFICE_BASE_URL` and `EOFFICE_ACCESS_TOKEN`, and pass it to the commands the
-   skill proposes with `node --env-file=<path>`. The agent never reads that file.
+3. `eoffice-api` only: create a private env file outside any repo and restrict it.
+
+   ```bash
+   cp ~/.claude/skills/log-task/assets/env.example ~/.config/log-task/eoffice.env
+   chmod 600 ~/.config/log-task/eoffice.env
+   ```
+
+   | Variable | Required | Meaning |
+   |---|---|---|
+   | `EOFFICE_BASE_URL` | yes | Origin only, for example `https://host.example.vn` (no path) |
+   | `EOFFICE_ACCESS_TOKEN` | yes | Integration token |
+   | `EOFFICE_UAT_HOSTS` | no | Comma-separated hosts treated as UAT. Any other host needs an explicit "write to production" instruction |
+   | `EOFFICE_SESSION_COOKIE` | no | Session cookie for the progress-report record. Prefer `--session-from brave\|chrome` |
+   | `EOFFICE_SETTLE_MS` | no | Pause between API steps, default 3000 |
+
+   The agent never reads this file. It gives you commands of the form
+   `node --env-file=~/.config/log-task/eoffice.env ... create --dry-run ...` to run yourself.
+   Tokens and cookies are never printed or stored.
 
 ## Use
 
-Open your agent in a project (or in the group folder) and run `/log-task`.
-The skill resolves the project, gathers evidence for the date window you give,
-drops work that is already in the ledger, shows a draft, and writes only after
-you approve. Production eOffice writes need an explicit instruction in the run.
+1. Open your agent in a project (or in the group folder) and run `/log-task`.
+2. Give the date window. The skill gathers commits, Claude history and
+   checkpoints, and drops work that is already in the ledger.
+3. Review the draft. Approve it or ask for edits.
+4. For `eoffice-api`, run the proposed `--dry-run` first, then `--apply`.
+   Writing to a host outside the UAT list requires you to say so in that run.
 
 ## Platforms
 
