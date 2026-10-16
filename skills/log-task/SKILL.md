@@ -1,6 +1,6 @@
 ---
 name: log-task
-description: Log completed work into a project's declared platform (eoffice, eoffice-api, lark, or manual). Trigger: /log-task
+description: Log completed work (from git commits, Claude history and checkpoints) into a project's declared platform (eoffice-api, lark, or manual). Use when the user runs /log-task or asks to log, report or book finished work to eOffice or Lark.
 ---
 
 # log-task
@@ -19,25 +19,24 @@ skill directory first; the script locates its skill directory itself:
 
 On exit code 2, show the stderr message and stop. If it says no project is
 configured, or that `projects.json` was not found, show the user this template
-to add to `projects.json` (when the file is missing, the user creates it from
-`projects.json.example`; never create or guess the file yourself):
+to add to `projects.json`. That file lives in the data directory (`$LOG_TASK_HOME`,
+else `~/.config/log-task`); when it is missing, the user creates it from
+`<skill-dir>/assets/projects.json.example`. Never create or guess the file yourself:
 
     "<absolute-path-to-project-root>": {
-      "platform": "eoffice" | "eoffice-api" | "lark" | "manual",
+      "platform": "eoffice-api" | "lark" | "manual",
       "gitEmails": ["you@example.com"],
       "params": {}
     }
 
-or, for a workspace holding several repos (eoffice and eoffice-api):
+or, for a workspace holding several repos:
 
     "<absolute-path-to-group-root>": {
       "type": "group",
-      "platform": "eoffice",
+      "platform": "eoffice-api",
       "gitEmails": ["you@example.com"],
       "logDir": ".log-task",
-      "params": { "defaultAssignor": "...", "defaultAssignee": "...",
-                  "defaultFollower": "...", "defaultCollaborator": "..." },
-      "children": { "<repo-relative-path>": { "params": { "project": "<eOffice project name>" } } }
+      "children": { "<repo-relative-path>": { "params": { "project": "<eOffice project name>" }, "rules": {} } }
     }
 
 Never guess a platform for an unlisted project.
@@ -122,11 +121,9 @@ pick case in either direction.
 
 From the raw evidence, synthesize candidate tasks: a short name, an inferred
 estimate range, the actual evidence date range, a status if not clearly
-"Done", and which evidence backs it. This is judgment, not a script -- match
-the shape and rigor of
-`/Users/trannguyendanghuy/Workspace/work/nova/task-log-2026-07-30-to-2026-08-26.md`
-(grouped by module, Estimate / Actual evidence / Suggested log window /
-Status / Evidence per task, sources footer at the end).
+"Done", and which evidence backs it. This is judgment, not a script -- group
+tasks by module and give each one Estimate / Actual evidence / Suggested log
+window / Status / Evidence, with a sources footer at the end.
 
 Before fingerprinting, normalize the task name so a fresh run's wording
 doesn't silently miss a match: lowercase it, strip any leading layer tag
@@ -193,18 +190,12 @@ Applies when Step 1 returns `mode: "group-run"`. `child-run` follows the normal
 - Steps 2-4 per target, reporting dropped candidates per target. If no target
   has new candidates, report "nothing new to log" and stop.
 - Step 5-6: one draft grouped target -> module -> task, following
-  `references/eoffice.md` (or `references/eoffice-api.md` for eoffice-api targets), showing each target's `params.project`. List
+  the target platform's reference file (`references/<platform>.md`), showing each target's `params.project`. List
   targets with nothing new as "nothing new". After approval, save the draft to
   `<logRoot>/drafts/<window-start>_<window-end>_<HHmmss>.md` (never overwrite).
   This draft save and the `.gitignore` prompt below apply to any run with a
   non-null `groupRoot` (group-run and child-run).
-- Step 7 (for an `eoffice-api` target, follow the "eoffice-api platform" section below instead): for `eoffice-api` targets use one `batch.json`, one rules file and one state file PER TARGET, run `create --dry-run` for EVERY target first and stop the whole group if any dry-run fails, and only then run `--apply` per target (each needing its own approval naming the host). For other targets, follow `references/eoffice.md` "Write procedure" with each task's
-  `project` taken from its target. Keep the two gates separate. If
-  `create-task --dry-run` fails for any target, stop the whole batch before any
-  real create and name the failing target. The dry-run checks input and the
-  local form map only; it does not contact eOffice, so an unknown Project
-  surfaces at the real create as a per-task failure: report it by task name,
-  never retry with altered data, and ledger only confirmed tasks. Append a task to its **own target's**
+- Step 7: follow each target's platform reference. For `eoffice-api` targets use one `batch.json`, one rules file and one state file PER TARGET, run `create --dry-run` for EVERY target first and stop the whole group if any dry-run fails, and only then run `--apply` per target (each needing its own approval naming the host). Never retry a failed task with altered data and ledger only confirmed tasks. Append a task to its **own target's**
   ledger only after every required step for that task succeeded; a failure in
   one target does not block ledgering the others.
 - Ledger writes use a temp file + rename, as always.

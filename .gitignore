@@ -1,7 +1,9 @@
 node_modules/
-.eoffice-session.json
 projects.json
 state/
+ledger/
+.checkpoint/
+.superpowers/
 .env
 .env.*
 !.env.example
