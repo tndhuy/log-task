@@ -94,7 +94,7 @@ async function startServer() {
 
 function run(args, env) {
   return new Promise((resolve) => {
-    const child = spawn('node', [cli, ...args], { env: { ...process.env, ...env } });
+    const child = spawn('node', [cli, ...args], { env: { ...process.env, LOG_TASK_HOME: '/nonexistent-log-task-home', ...env } });
     let out = '';
     let err = '';
     child.stdout.on('data', (d) => { out += d; });

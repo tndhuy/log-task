@@ -24,30 +24,29 @@ npx skills add tndhuy/log-task -a claude-code -g -y   # Claude Code, all project
 Update later with `npx skills update log-task`. Your configuration lives outside
 the skill directory, so updates never overwrite it.
 
-## Configure (once, about 5 minutes)
+## Configure (once, about 3 minutes)
 
-1. Create the data directory and copy the example config:
+1. Create your data directory with starter files. It never overwrites existing files:
 
    ```bash
-   mkdir -p ~/.config/log-task
-   cp ~/.claude/skills/log-task/assets/projects.json.example ~/.config/log-task/projects.json
+   node ~/.claude/skills/log-task/scripts/init.mjs
    ```
 
-   Set `LOG_TASK_HOME` to use a different directory.
+   This creates `~/.config/log-task/projects.json` (your git email filled in) and a
+   private `eoffice.env` (mode 600). The commands work from any directory, because the
+   shell expands `~` to your home. Set `LOG_TASK_HOME` to an absolute path to use another
+   directory. If you installed per project (no `-g`) or for another agent, replace
+   `~/.claude/skills/log-task` with the path `npx skills` printed.
 
-2. Edit `projects.json`: one entry per project, or one `"type": "group"` entry
-   for a workspace folder that holds several repos.
+2. Edit `~/.config/log-task/projects.json`: one entry per project, or one
+   `"type": "group"` entry for a workspace folder that holds several repos.
    - `platform`: `eoffice-api`, `lark` or `manual`.
    - `gitEmails`: the emails on your commits. A wrong email finds no work.
    - `eoffice-api` repos also need `rules` (task name template, project
      `projectRef`/`projectId`, parent candidates, assignee usernames).
 
-3. `eoffice-api` only: create a private env file outside any repo and restrict it.
-
-   ```bash
-   cp ~/.claude/skills/log-task/assets/env.example ~/.config/log-task/eoffice.env
-   chmod 600 ~/.config/log-task/eoffice.env
-   ```
+3. `eoffice-api` only: put your values in `~/.config/log-task/eoffice.env`.
+   The scripts load this file automatically; no `--env-file` flag is needed.
 
    | Variable | Required | Meaning |
    |---|---|---|
@@ -57,9 +56,20 @@ the skill directory, so updates never overwrite it.
    | `EOFFICE_SESSION_COOKIE` | no | Session cookie for the progress-report record. Prefer `--session-from brave\|chrome` |
    | `EOFFICE_SETTLE_MS` | no | Pause between API steps, default 3000 |
 
-   The agent never reads this file. It gives you commands of the form
-   `node --env-file=~/.config/log-task/eoffice.env ... create --dry-run ...` to run yourself.
-   Tokens and cookies are never printed or stored.
+   Variables already exported in your shell win over the file. To target another
+   environment, pass a second file as two words: `node --env-file "$HOME/prod.env" ...`
+   (`--env-file=~/prod.env` is not expanded by the shell). Values in env files must be
+   absolute paths or plain text, never `~`.
+   The agent never reads these files, and tokens and cookies are never printed or stored.
+
+4. Check the setup from your project folder:
+
+   ```bash
+   node ~/.claude/skills/log-task/scripts/doctor.mjs
+   ```
+
+   It checks Node, git, the config, which project the current folder maps to, and
+   whether the required variables are set (names only, never values).
 
 ## Use
 

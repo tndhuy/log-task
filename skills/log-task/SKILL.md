@@ -21,7 +21,9 @@ On exit code 2, show the stderr message and stop. If it says no project is
 configured, or that `projects.json` was not found, show the user this template
 to add to `projects.json`. That file lives in the data directory (`$LOG_TASK_HOME`,
 else `~/.config/log-task`); when it is missing, the user creates it from
-`<skill-dir>/assets/projects.json.example`. Never create or guess the file yourself:
+`<skill-dir>/assets/projects.json.example`, or runs `node <skill-dir>/scripts/init.mjs`
+which creates the data directory, the config and the env file without overwriting anything.
+Never create or guess the file yourself:
 
     "<absolute-path-to-project-root>": {
       "platform": "eoffice-api" | "lark" | "manual",
@@ -207,5 +209,6 @@ Applies when Step 1 returns `mode: "group-run"`. `child-run` follows the normal
 When a target's `platform` is `eoffice-api`, replace the platform-specific
 parts of Steps 5-7 with `references/eoffice-api.md` ("Draft format" and
 "Procedure"). Everything else (evidence, per-target ledger, group runs, approval
-gates) is unchanged. Never read `.env`; ask the user to run commands with
-`node --env-file=<path>`. A token is never printed or stored.
+gates) is unchanged. Never read the env file (`<data-dir>/eoffice.env`); the scripts load it themselves.
+Run `node <skill-dir>/scripts/doctor.mjs` to check Node, git, the config and the
+variables (names only). A token is never printed or stored.

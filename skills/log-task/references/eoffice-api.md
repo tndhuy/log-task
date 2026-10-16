@@ -22,8 +22,12 @@ with no children that is not itself a child (verified on UAT: 14113 reported, 14
 A task that is already
 REVIEW refuses a progress report ("không có quyền"). Tasks without an assignee trigger
 an automatic warning, so the CLI refuses empty `assignees`.
-The user runs, or approves running, every command with
-`node --env-file=<path-to-env-file> <script> ...`.
+The user runs, or approves running, every command. The CLI loads
+`<data-dir>/eoffice.env` by itself (`$LOG_TASK_HOME`, else `~/.config/log-task`), so no
+flag is needed; variables already exported in the shell win over the file. To target
+another environment (for example production), pass `--env-file <path>` to `node`
+before the script. Write it as two words: `--env-file=~/x` is not expanded by zsh or bash,
+so use `--env-file "$HOME/x"`.
 
 ## Config
 
@@ -83,7 +87,7 @@ target host. Only `Done` tasks may be created.
    `node <skill-dir>/scripts/eoffice-api-state.mjs settings-plan --rules <rules.json> --state <statePath>`.
 2. Parent candidates. If `rules.parent.candidates` is set, show those (labels)
    and skip the search. Otherwise (read-only):
-   `node --env-file=<env> <skill-dir>/scripts/eoffice-api-write.mjs search-parent --project-id <projectId> --search "<rules.parent.search>"`.
+   `node <skill-dir>/scripts/eoffice-api-write.mjs search-parent --project-id <projectId> --search "<rules.parent.search>"`.
    The "at most 5" cap applies to `search-parent` results only; always show
    every configured `candidates` entry. Either way, pre-select the remembered one (else the plan's
    `preselected`) and let the user pick.
@@ -108,10 +112,10 @@ target host. Only `Done` tasks may be created.
    `batch.json`, `rules.json` and `settings.json`, and delete it after the run;
    never write them into the user's repository.
 5. Dry-run (read-only, includes the duplicate guard):
-   `node --env-file=<env> <skill-dir>/scripts/eoffice-api-write.mjs create --dry-run batch.json`.
+   `node <skill-dir>/scripts/eoffice-api-write.mjs create --dry-run batch.json`.
    Show the plan, the host, and any task marked as already existing. Stop on any error.
 6. Explicit approval that names the host. Then:
-   `node --env-file=<env> <skill-dir>/scripts/eoffice-api-write.mjs create --apply --confirm-host <host> batch.json`.
+   `node <skill-dir>/scripts/eoffice-api-write.mjs create --apply --confirm-host <host> batch.json`.
    Add `--allow-production` only for a non-UAT host, and only when the user
    states in this run that the UAT checklist (`docs/eoffice-api-uat-checklist.md`)
    is complete; never add it in response to a refusal message.

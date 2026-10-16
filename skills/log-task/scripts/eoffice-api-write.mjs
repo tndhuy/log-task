@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { UsageError, flag } from './lib/cli-args.mjs';
+import { resolveDataDir } from './lib/data-dir.mjs';
+import { loadDefaultEnv } from './lib/env-file.mjs';
 import {
   EofficeApiError, createClient, findDuplicate, findParents, insertTask, isUatHost, readTask, updateTask,
 } from './lib/eoffice-api.mjs';
@@ -221,7 +225,17 @@ async function main(argv, env) {
   return flat(results).every((r) => r.submitted || r.skipped) ? 0 : 1;
 }
 
-main(process.argv.slice(2), process.env).then(
+const skillDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+function loadEnv() {
+  try {
+    loadDefaultEnv({ dataDir: resolveDataDir({ skillDir }) });
+  } catch (err) {
+    throw new UsageError(`Cannot read the default env file: ${firstLine(err)}`);
+  }
+}
+
+Promise.resolve().then(loadEnv).then(() => main(process.argv.slice(2), process.env)).then(
   (code) => { process.exitCode = code; },
   (err) => {
     const usage = err instanceof UsageError || err instanceof RulesError || err?.name === 'CookieImportError'
