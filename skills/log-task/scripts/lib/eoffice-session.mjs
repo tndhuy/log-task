@@ -5,6 +5,8 @@ const RELOAD = '/integration-document?_json=1&reloadCsrfToken=1&inlineLogin=1';
 const PROGRESS = '/work-task-task/progress?_json=1';
 const REALTIME = '/work-task-task/realtime?_json=1';
 const ADD = '/work-task-task/add?_json=1';
+const LIST = '/work-normal-normal';
+const LIST_PAGES = 6;
 
 // Raw defaults of the UI "create task" form; the flag values are the form's own, not the API's display strings.
 const ADD_FORM_DEFAULTS = {
@@ -18,6 +20,43 @@ const ADD_FORM_DEFAULTS = {
  * date edit that corrects actual dates. Both use the UI endpoint with a browser session cookie plus a CSRF token that the
  * server returns in the `csrf-token-cache` response header.
  */
+const ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#039;': "'", '&#39;': "'" };
+const decode = (text) => String(text ?? '').replace(/&(?:amp|lt|gt|quot|#0?39);/g, (entity) => ENTITIES[entity]);
+const isoFromUi = (value) => {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value ?? '');
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : null;
+};
+
+// The list page is server-driven markup with the row data embedded as JSON; this reads that JSON only.
+export function parseTaskRows(text) {
+  const starts = [...text.matchAll(/\{"view":"list","ID":(\d+),"vals":\{/g)];
+  return starts.map((match, index) => {
+    const valsStart = match.index + match[0].length - 1;
+    let depth = 0;
+    let end = valsStart;
+    for (; end < text.length; end += 1) {
+      if (text[end] === '{') depth += 1;
+      if (text[end] === '}' && (depth -= 1) === 0) break;
+    }
+    const vals = JSON.parse(text.slice(valsStart, end + 1));
+    const segment = text.slice(end, starts[index + 1]?.index ?? text.length);
+    const parent = /table-sub-title[^]{0,40}?view\?ID=(\d+)/.exec(segment)?.[1];
+    return {
+      id: Number(match[1]),
+      title: decode(vals.title),
+      parentId: parent === undefined ? null : Number(parent),
+      owner_ids: vals.owner_ids ?? '',
+      assign_ids: vals.assign_ids ?? '',
+      status: vals.status,
+      percent: vals.percent,
+      start_plan: isoFromUi(vals.start_plan),
+      end_plan: isoFromUi(vals.end_plan),
+      start: isoFromUi(vals.start),
+      end: isoFromUi(vals.end),
+    };
+  });
+}
+
 export function createSessionClient({ baseUrl, cookie, fetchImpl = globalThis.fetch }) {
   if (!cookie) throw new EofficeApiError('EOFFICE_SESSION_COOKIE is not set', { code: 'missing_env' });
   const origin = new URL(baseUrl).origin;
@@ -130,5 +169,51 @@ export function createSessionClient({ baseUrl, cookie, fetchImpl = globalThis.fe
     return Number(id);
   }
 
-  return { reportProgress, updateDates, addTask };
+  async function getText(path, referer) {
+    const res = await send(path, { headers: { ...base, referer: `${origin}${referer}` } });
+    return { status: res.status, text: scrub(await res.text()) };
+  }
+
+  // The search parameter of the list is unknown, so read every task assigned to the user (tab assign_all) page by page.
+  let listCache;
+  async function listTasks({ refresh = false } = {}) {
+    if (listCache && !refresh) return listCache;
+    const rows = [];
+    for (let page = 1; page <= LIST_PAGES; page += 1) {
+      const query = new URLSearchParams({ v: 'list', tab: 'assign_all', _json: '1' });
+      if (page > 1) query.set('p', String(page));
+      const { status, text } = await getText(`${LIST}?${query}`, LIST);
+      if (status !== 200) throw new EofficeApiError(`Task list refused (HTTP ${status})`, { code: 'session' });
+      const batch = parseTaskRows(text);
+      rows.push(...batch);
+      const range = Number(/"page":\{"total":\d+,"current":\d+,"range":(\d+)/.exec(text)?.[1] ?? 50);
+      if (batch.length < range) break;
+    }
+    listCache = rows;
+    return rows;
+  }
+
+  const findByTitle = async ({ title, parentId, refresh = false }) => (
+    (await listTasks({ refresh })).find((row) => row.title === title && String(row.parentId) === String(parentId)) ?? null
+  );
+
+  // Status, percent and actual end come from the detail page; people come from the edit form, which only opens while
+  // the task is still DOING, so call this with people:true right after creating it.
+  async function readTask({ id, people = false }) {
+    const view = await getText(`${LIST}/view?ID=${id}&_json=1`, LIST);
+    const row = /"rows":\[\{"view":"view","ID":(\d+),"status":"([A-Z_]+)","end":(null|"[^"]*"),"percent":(\d+)/.exec(view.text);
+    if (!row) return null;
+    const task = { id: Number(row[1]), status: row[2], end: row[3] === 'null' ? null : row[3].slice(1, 11), percent: Number(row[4]) };
+    if (people) {
+      const edit = await getText(`/work-task-task/edit?ID=${id}&_json=1`, LIST);
+      task.owner_ids = /"owner_ids":"([\d,]*)","all_owner_ids"/.exec(edit.text)?.[1];
+      task.assign_ids = /"assign_ids":"([\d,]*)","all_assign_ids"/.exec(edit.text)?.[1];
+      if (task.owner_ids === undefined || task.assign_ids === undefined) {
+        throw new EofficeApiError('Cannot read the people of the new task from the edit form', { code: 'session_read' });
+      }
+    }
+    return task;
+  }
+
+  return { reportProgress, updateDates, addTask, listTasks, findByTitle, readTask };
 }

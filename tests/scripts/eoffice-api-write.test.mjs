@@ -23,6 +23,7 @@ async function startServer() {
   const flags = { failNextItem: false, ignoreRealtime: false, dropOwnersOnAdd: false, noRedirectOnAdd: false };
   const realtimes = [];
   const adds = [];
+  const apiHits = [];
   const itemCalls = [];
   const peopleIds = (value) => String(value ?? '').split(',').map((name) => name.trim())
     .filter((name) => name && !unresolved.has(name)).map((name) => 7000 + name.length).join(',');
@@ -53,6 +54,29 @@ async function startServer() {
       res.end(JSON.stringify({ close: true, notice: 'Cập nhật thành công' }));
       return;
     }
+    const sessionOk = req.headers.cookie === 'sess=1';
+    if (url.pathname === '/work-normal-normal' && url.searchParams.get('v') === 'list') {
+      if (!sessionOk) { res.end(JSON.stringify({ message: 'Bạn không có quyền thực hiện chức năng này' })); return; }
+      const mine = tasks.filter((t) => t.created_by_id === 8990);
+      const page = Number(url.searchParams.get('p') ?? 1);
+      const rowsHtml = mine.slice((page - 1) * 50, page * 50).map((t) => `{"view":"list","ID":${t.ID},"vals":{"title":${JSON.stringify(t.title)},"owner_ids":"${t.owner_ids}","assign_ids":"${t.assign_ids ?? ''}","status":"${t.status}","percent":${t.percent},"start_plan":"06/10/2026"},"fields":{"title":"<a class=table-sub-title href=/work-normal-normal/view?ID=${t.parent_id}>Parent</a>"}}`).join(',');
+      res.end(`<elem data-props='{"rows":[${rowsHtml}],"page":{"total":${mine.length},"current":${page},"range":50}}'></elem>`);
+      return;
+    }
+    if (url.pathname === '/work-normal-normal/view') {
+      if (!sessionOk) { res.end(JSON.stringify({ message: 'no' })); return; }
+      const t = tasks.find((x) => String(x.ID) === url.searchParams.get('ID'));
+      res.end(t ? `<elem data-props='{"rows":[{"view":"view","ID":${t.ID},"status":"${t.status}","end":null,"percent":${t.percent},"actions":null}]}'></elem>` : JSON.stringify({ message: 'The object has been deleted or does not exist' }));
+      return;
+    }
+    if (url.pathname === '/work-task-task/edit') {
+      const t = tasks.find((x) => String(x.ID) === url.searchParams.get('ID'));
+      if (!sessionOk || !t) { res.end(JSON.stringify({ message: 'You don\'t have permission to do this action' })); return; }
+      res.end(t.status !== 'DOING' ? JSON.stringify({ message: 'Cannot edit the task in the current status' })
+        : `<elem data-props='{"owner_ids":"${t.owner_ids}","all_owner_ids":"${t.owner_ids}","assign_ids":"${t.assign_ids ?? ''}","all_assign_ids":"${t.assign_ids ?? ''}"}'></elem>`);
+      return;
+    }
+    if (url.pathname.startsWith('/api/')) apiHits.push(url.pathname);
     if (url.pathname === '/work-task-task/add') {
       const ok = req.headers.cookie === 'sess=1' && req.headers['csrf-token-cache'] === 'csrf-fresh-0123456789abcdef01234567';
       if (!ok) {
@@ -161,7 +185,7 @@ async function startServer() {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
-  return { server, tasks, posts, updates, reports, deletes, unresolved, keepOnDelete, flags, itemCalls, realtimes, adds, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
+  return { server, tasks, posts, updates, reports, deletes, unresolved, keepOnDelete, flags, itemCalls, realtimes, adds, apiHits, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
 }
 
 function run(args, env) {
@@ -1112,5 +1136,96 @@ test('a session-created flat task with a report keeps plan dates and is not flag
     assert.equal(JSON.parse(dry.out).plan[0].datesFromRun, false);
     const noReport = await run(['create', '--dry-run', '--via', 'session', '--no-report', batchFile(['Past task'], { rulesOverride: sessionRules })], strict);
     assert.equal(JSON.parse(noReport.out).plan[0].datesFromRun, true);
+  } finally { s.server.close(); }
+});
+
+const tokenless = (s) => ({ ...env(s), EOFFICE_ACCESS_TOKEN: '', ...sess });
+const viaSessionNoToken = (s, file, extra = {}) => run(
+  ['create', '--apply', '--allow-production', '--confirm-host', s.host, '--via', 'session', file], { ...tokenless(s), ...extra },
+);
+
+test('without a token, --via session creates and reports using only the browser session', async () => {
+  const s = await startServer();
+  try {
+    const r = await viaSessionNoToken(s, batchFile(['Task one'], { rulesOverride: sessionRules }));
+    assert.equal(r.code, 0, r.err);
+    const [result] = lastLine(r.out);
+    assert.equal(result.submitted, true);
+    assert.equal(result.status, 'REVIEW');
+    assert.equal(result.report, 'progress-report');
+    assert.equal(s.apiHits.length, 0);
+    assert.equal(s.reports.length, 1);
+  } finally { s.server.close(); }
+});
+
+test('without a token, a rerun finds the existing task in the session list and skips it', async () => {
+  const s = await startServer();
+  try {
+    const file = batchFile(['Task one'], { rulesOverride: sessionRules });
+    await viaSessionNoToken(s, file);
+    const dry = await run(['create', '--dry-run', '--via', 'session', file], tokenless(s));
+    assert.equal(dry.code, 0, dry.err);
+    assert.equal(JSON.parse(dry.out).plan[0].duplicate.title, '[One Nova] - BE - [BE] Task one');
+    const again = await viaSessionNoToken(s, file);
+    assert.equal(lastLine(again.out)[0].skipped, 'already exists');
+    assert.equal(s.adds.length, 1);
+    assert.equal(s.apiHits.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('without a token, owners the server dropped are caught through the edit form', async () => {
+  const s = await startServer();
+  try {
+    s.flags.dropOwnersOnAdd = true;
+    const r = await viaSessionNoToken(s, batchFile(['One', 'Two'], { rulesOverride: sessionRules }));
+    assert.equal(r.code, 1);
+    const [first, second] = lastLine(r.out);
+    assert.match(first.error, /^people not resolved: owner$/);
+    assert.match(second.skipped, /batch stopped/);
+    assert.equal(s.reports.length, 0);
+    assert.equal(s.apiHits.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('without a token or a session, create exits 2 and says what is needed', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(['create', '--dry-run', batchFile(['Task one'], { rulesOverride: sessionRules })], { ...env(s), EOFFICE_ACCESS_TOKEN: '' });
+    assert.equal(r.code, 2);
+    assert.match(r.err, /EOFFICE_ACCESS_TOKEN or a browser session/);
+  } finally { s.server.close(); }
+});
+
+test('without a token, tasks that finish with a status update are refused before anything is created', async () => {
+  const s = await startServer();
+  try {
+    const dir = mkdtempSync(join(tmpdir(), 'eoffice-write-'));
+    const file = join(dir, 'batch.json');
+    writeFileSync(file, JSON.stringify({
+      rules: sessionRules, project: { ref: '1456', id: '3869' },
+      settings: { parent: 2089469, owner: 'Owner Name', assignees: ['Owner Name'], followers: [] },
+      tasks: [{ summary: 'Parent', startPlan: '2026-10-06', endPlan: '2026-10-09', children: [{ summary: 'Child', startPlan: '2026-10-06', endPlan: '2026-10-07' }] }],
+    }));
+    const withChildren = await viaSessionNoToken(s, file);
+    assert.equal(withChildren.code, 2);
+    assert.match(withChildren.err, /needs EOFFICE_ACCESS_TOKEN/);
+    const noReport = await viaSessionNoToken(s, batchFile(['Task one'], { rulesOverride: sessionRules }), {});
+    assert.equal(noReport.code, 0, noReport.err);
+    const flagged = await run(['create', '--apply', '--allow-production', '--confirm-host', s.host, '--via', 'session', '--no-report',
+      batchFile(['Task two'], { rulesOverride: sessionRules })], tokenless(s));
+    assert.equal(flagged.code, 2);
+    assert.equal(s.adds.length, 1);
+  } finally { s.server.close(); }
+});
+
+test('commands that only the token can serve fail with exit 2 when it is missing', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    for (const args of [['get', '--ids', '5000'], ['delete', '--dry-run', '--project-id', '3869', '--ids', '5000']]) {
+      const r = await run(args, { ...env(s), EOFFICE_ACCESS_TOKEN: '' });
+      assert.equal(r.code, 2, args[0]);
+      assert.match(r.err, /EOFFICE_ACCESS_TOKEN/);
+    }
   } finally { s.server.close(); }
 });

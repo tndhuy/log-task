@@ -189,6 +189,11 @@ and the response carries the new task's `redirect: work-normal-normal/view?ID=<i
 - Owners stay as the rules say; only the creator changes. `rules.flags` is ignored: the form's own defaults apply.
 - Finishing: a flat task gets the progress report at 100% (it moves to REVIEW by itself); a parent or child
   gets a status update. The people check, duplicate guard and batch stop work as with the API.
+- **No token needed for create.** Without `EOFFICE_ACCESS_TOKEN` the CLI reads through the same session: the duplicate
+  guard scans the user's `assign_all` task list (about 4 pages, tens of seconds, read once per run), the people check reads
+  the edit form while the task is still DOING, and the final status comes from the detail page. A batch containing
+  parents, children or `--no-report` still needs the token because it finishes with a status update, and `get`,
+  `delete`, `search-parent` always need it.
 - Who may do what (production, observed): the task's **creator** is the signed-in user. While the task is **DOING** the
   creator who is also its assignee may open the edit form and the dates dialog; changing the **status** and **deleting**
   are refused. The **progress report** needs the user to be an assignee. Once the task is **REVIEW** the edit form is

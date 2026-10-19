@@ -81,6 +81,24 @@ export function createClient({ baseUrl, token, fetchImpl = globalThis.fetch }) {
   return { host, call };
 }
 
+// Stands in when no token is configured: the host is known, every API call fails with a clear message.
+export function createOfflineClient({ baseUrl }) {
+  if (!baseUrl) throw new EofficeApiError('EOFFICE_BASE_URL is not set', { code: 'missing_env' });
+  let host;
+  try {
+    host = new URL(baseUrl).host;
+  } catch {
+    throw new EofficeApiError('EOFFICE_BASE_URL is not a valid URL (include https://)', { code: 'missing_env' });
+  }
+  return {
+    host,
+    offline: true,
+    async call() {
+      throw new EofficeApiError('EOFFICE_ACCESS_TOKEN is not set (this step needs the integration token)', { code: 'missing_env' });
+    },
+  };
+}
+
 async function gets(client, filter, limit) {
   const body = await client.call('GET', GETS, {
     limit,

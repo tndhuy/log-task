@@ -6,7 +6,7 @@ import { UsageError, flag } from './lib/cli-args.mjs';
 import { resolveDataDir } from './lib/data-dir.mjs';
 import { loadDefaultEnv } from './lib/env-file.mjs';
 import {
-  EofficeApiError, createClient, deleteTask, findDuplicate, findParents, getItem, insertTask, isUatHost, readTask, taskLink, updateTask,
+  EofficeApiError, createClient, createOfflineClient, deleteTask, findDuplicate, findParents, getItem, insertTask, isUatHost, readTask, taskLink, updateTask,
 } from './lib/eoffice-api.mjs';
 import { createSessionClient } from './lib/eoffice-session.mjs';
 import {
@@ -271,7 +271,10 @@ async function runDelete(client, args, env) {
 async function main(argv, env) {
   const [command, ...args] = argv;
   if (!['search-parent', 'create', 'get', 'delete', 'set-dates'].includes(command)) throw new UsageError(USAGE);
-  const client = createClient({ baseUrl: env.EOFFICE_BASE_URL, token: env.EOFFICE_ACCESS_TOKEN });
+  const hasToken = Boolean(env.EOFFICE_ACCESS_TOKEN);
+  const client = hasToken
+    ? createClient({ baseUrl: env.EOFFICE_BASE_URL, token: env.EOFFICE_ACCESS_TOKEN })
+    : createOfflineClient({ baseUrl: env.EOFFICE_BASE_URL });
 
   if (command === 'search-parent') {
     const rows = await findParents(client, {
@@ -292,16 +295,37 @@ async function main(argv, env) {
   }
   if (apply) assertApplyAllowed(args, client, env);
   const sessionFrom = flag(args, '--session-from');
-  if (sessionFrom !== undefined && !apply) throw new UsageError('--session-from only applies to --apply');
   if (sessionFrom !== undefined && !['chrome', 'brave'].includes(sessionFrom)) {
     throw new UsageError('--session-from must be chrome or brave');
   }
 
   const via = flag(args, '--via') ?? 'api';
+  if (sessionFrom !== undefined && !apply && via !== 'session') throw new UsageError('--session-from only applies to --apply');
   // A progress report needs the signed-in user to be an assignee; --no-report finishes with a status update instead.
   const noReport = args.includes('--no-report');
   if (!['api', 'session'].includes(via)) throw new UsageError('--via must be api or session');
   const batch = readBatch(args.at(-1));
+  const cookie = env.EOFFICE_SESSION_COOKIE || (sessionFrom ? await cookieFromBrowser(sessionFrom, client.host) : '');
+  if (via === 'session' && apply && !cookie) {
+    throw new UsageError('--via session needs a browser session: pass --session-from brave|chrome or set EOFFICE_SESSION_COOKIE');
+  }
+  if (!hasToken && !cookie) {
+    throw new UsageError('Reading tasks needs EOFFICE_ACCESS_TOKEN or a browser session (--session-from brave|chrome, EOFFICE_SESSION_COOKIE)');
+  }
+  const progress = cookie ? createSessionClient({ baseUrl: env.EOFFICE_BASE_URL, cookie }) : null;
+  // Reads go through the token when there is one; without it the signed-in user's own list, detail page and edit form.
+  const reader = hasToken ? {
+    findDuplicate: ({ title, parentId }) => findDuplicate(client, { title, parentId }),
+    findByTitle: ({ title, parentId }) => readTask(client, { title, parentId }),
+    item: ({ id }) => getItem(client, { id, raw: true }),
+  } : {
+    findDuplicate: async ({ title, parentId }) => {
+      const hit = await progress.findByTitle({ title, parentId });
+      return hit && { id: hit.id, title: hit.title };
+    },
+    findByTitle: ({ title, parentId }) => progress.findByTitle({ title, parentId, refresh: true }),
+    item: ({ id, people = false }) => progress.readTask({ id, people }),
+  };
   const linkFor = makeLinker(env);
   const today = env.EOFFICE_TODAY ?? new Date().toLocaleDateString('en-CA');
   const acceptRunDates = args.includes('--accept-run-dates') || env.EOFFICE_ACCEPT_RUN_DATES === '1';
@@ -311,7 +335,7 @@ async function main(argv, env) {
     });
     const repeated = seen.has(title);
     seen.add(title);
-    const duplicate = repeated ? null : await findDuplicate(client, { title, parentId });
+    const duplicate = repeated ? null : await reader.findDuplicate({ title, parentId });
     const reportDate = task.end ?? task.endPlan ?? task.startPlan;
     const sessionFields = via === 'session' ? {
       title,
@@ -350,11 +374,19 @@ async function main(argv, env) {
   }
 
   // Only a session-created flat task with a report gets its actual dates from the plan; every other path stamps the run date.
-  const runDates = (item, isChild) => item.pastDates
-    && !(via === 'session' && !isChild && !item.children?.length && !noReport);
+  const finishesWithReport = (item, isChild) => via === 'session' && !isChild && !item.children?.length && !noReport;
+  const runDates = (item, isChild) => item.pastDates && !finishesWithReport(item, isChild);
   for (const item of plan) {
     item.datesFromRun = runDates(item, false);
     for (const child of item.children) child.datesFromRun = runDates(child, true);
+  }
+
+  if (!hasToken) {
+    const needsToken = plan.flatMap((item) => [[item, false], ...item.children.map((c) => [c, true])])
+      .filter(([item, isChild]) => !item.duplicate && !finishesWithReport(item, isChild));
+    if (needsToken.length) {
+      throw new UsageError(`${needsToken.length} task(s) finish with a status update, which needs EOFFICE_ACCESS_TOKEN (${needsToken[0][0].summary}...)`);
+    }
   }
 
   if (!apply) {
@@ -367,13 +399,8 @@ async function main(argv, env) {
   }
 
   const settleMs = Number(env.EOFFICE_SETTLE_MS ?? 3000);
-  const cookie = env.EOFFICE_SESSION_COOKIE || (sessionFrom ? await cookieFromBrowser(sessionFrom, client.host) : '');
-  if (via === 'session' && !cookie) {
-    throw new UsageError('--via session needs a browser session: pass --session-from brave|chrome or set EOFFICE_SESSION_COOKIE');
-  }
-  const progress = cookie ? createSessionClient({ baseUrl: env.EOFFICE_BASE_URL, cookie }) : null;
   const doneStatus = STATUS_DISPLAY[batch.rules.done?.status ?? 'REVIEW'];
-  const readBack = (item, parentId) => readTask(client, { title: item.title, parentId });
+  const readBack = (item, parentId) => reader.findByTitle({ title: item.title, parentId });
   const withLink = (result) => {
     const link = result.externalId === undefined ? undefined : linkFor(result.externalId);
     return link ? { ...result, link } : result;
@@ -418,7 +445,7 @@ async function main(argv, env) {
     } else {
       await updateTask(client, { id: inserted.id, status: doneStatus });
     }
-    const final = await getItem(client, { id: inserted.id, raw: true });
+    const final = await reader.item({ id: inserted.id });
     return {
       status: final?.status, percent: final?.percent, report: progress && reportable && !noReport ? 'progress-report' : 'status-update-only',
     };
@@ -432,7 +459,7 @@ async function main(argv, env) {
   async function checkPeople(item, base, id) {
     let error;
     try {
-      const missing = unresolvedPeople(item.payload, await getItem(client, { id, raw: true }));
+      const missing = unresolvedPeople(item.payload, await reader.item({ id, people: true }));
       if (!missing.length) return null;
       error = `people not resolved: ${missing.join(',')}`;
     } catch (err) {

@@ -9,9 +9,9 @@ checkpoints) into task records on the platform each project declares:
 
 - Node.js 22.13 or newer and `git`. No `npm install` is needed.
 - An agent that supports skills (Claude Code, Codex, Cursor, ...).
-- `eoffice-api`: an eOffice `access_token` with rights on the `work-normal-normal`
-  object, issued by your eOffice admin. For the progress-report record, also be
-  signed in to eOffice in Brave or Chrome (cookies are read from the macOS Keychain).
+- `eoffice-api`: be signed in to eOffice in Brave or Chrome (the session cookie is read from the macOS Keychain);
+  that is enough to create tasks and report progress. An admin-issued `access_token` for `work-normal-normal` is
+  optional and only needed for delete, get and tasks with subtasks.
 - `lark`: a Lark Base `baseToken` and `tableId`. `manual`: nothing extra.
 
 ## Install
@@ -51,7 +51,7 @@ the skill directory, so updates never overwrite it.
    | Variable | Required | Meaning |
    |---|---|---|
    | `EOFFICE_BASE_URL` | yes | Origin only, for example `https://host.example.vn` (no path) |
-   | `EOFFICE_ACCESS_TOKEN` | yes | Integration token |
+   | `EOFFICE_ACCESS_TOKEN` | no | Integration token issued by an admin. Needed for `delete`, `get`, parent/child tasks and `--via api`; `create --via session` works without it |
    | `EOFFICE_UAT_HOSTS` | no | Comma-separated hosts treated as UAT. Any other host needs an explicit "write to production" instruction |
    | `EOFFICE_SESSION_COOKIE` | no | Session cookie for the progress-report record. Prefer `--session-from brave\|chrome` |
    | `EOFFICE_SETTLE_MS` | no | Pause between API steps, default 3000 |

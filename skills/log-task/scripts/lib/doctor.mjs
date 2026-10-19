@@ -51,9 +51,10 @@ function checkProject(config, cwd, dataDir) {
 
 function checkEnv(env) {
   const checks = [];
-  for (const name of ['EOFFICE_BASE_URL', 'EOFFICE_ACCESS_TOKEN']) {
-    checks.push(env[name] ? ok(name, 'set') : fail(name, 'not set'));
-  }
+  checks.push(env.EOFFICE_BASE_URL ? ok('EOFFICE_BASE_URL', 'set') : fail('EOFFICE_BASE_URL', 'not set'));
+  checks.push(env.EOFFICE_ACCESS_TOKEN
+    ? ok('EOFFICE_ACCESS_TOKEN', 'set')
+    : warn('EOFFICE_ACCESS_TOKEN', 'not set: delete, get, parent/child tasks and --via api need it; create --via session works without'));
   if (env.EOFFICE_BASE_URL) {
     try {
       const { host } = new URL(env.EOFFICE_BASE_URL);

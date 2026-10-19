@@ -43,10 +43,10 @@ test('an unconfigured directory is a warning, not a failure', () => {
   assert.equal(byName(checks, 'project').status, 'warn');
 });
 
-test('eoffice-api targets require the base URL and token', () => {
+test('eoffice-api targets require the base URL; the token is only a warning', () => {
   const checks = runChecks(base);
   assert.equal(byName(checks, 'EOFFICE_BASE_URL').status, 'fail');
-  assert.equal(byName(checks, 'EOFFICE_ACCESS_TOKEN').status, 'fail');
+  assert.equal(byName(checks, 'EOFFICE_ACCESS_TOKEN').status, 'warn');
 });
 
 test('reports the host and never prints the token value', () => {

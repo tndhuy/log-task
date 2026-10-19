@@ -43,6 +43,7 @@ Use a UAT host and a UAT token with write permission on `work-normal-normal`.
 - [x] `delete` with `delIds=<one id>` removes a task; `item` then answers `Post not found` (F5, F7).
 - [x] The REVIEW status update sets the actual dates to the run date (F2).
 - [x] API-created tasks have `created_by_id` 1 and no department (F3).
+- [x] Token-less `create --via session` on production: duplicate guard from the `assign_all` list, people check from the edit form, status from the detail page (test task 2135885, deleted).
 - [x] Session create + report by an assignee: actual start = plan start, end = report date (2135588 and 14 more).
 - [x] A creator who is not an assignee cannot report; a user who is not an owner cannot edit dates (2135639).
 - [x] O3: `update assign_ids` accepts a display name and changes the assignees, but clears actual start and end.
