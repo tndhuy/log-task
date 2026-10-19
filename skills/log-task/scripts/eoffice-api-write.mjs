@@ -6,7 +6,7 @@ import { UsageError, flag } from './lib/cli-args.mjs';
 import { resolveDataDir } from './lib/data-dir.mjs';
 import { loadDefaultEnv } from './lib/env-file.mjs';
 import {
-  EofficeApiError, createClient, findDuplicate, findParents, insertTask, isUatHost, readTask, updateTask,
+  EofficeApiError, createClient, findDuplicate, findParents, getItem, insertTask, isUatHost, readTask, taskLink, updateTask,
 } from './lib/eoffice-api.mjs';
 import { createProgressClient } from './lib/eoffice-progress.mjs';
 import {
@@ -59,6 +59,16 @@ async function cookieFromBrowser(browser, host) {
     throw new UsageError(`No ${browser} cookies for ${host}: sign in to eOffice in ${browser} first`);
   }
   return cookieHeader(cookies);
+}
+
+const HALTED_MESSAGE = 'batch stopped: people not resolved';
+const idCount = (value) => String(value ?? '').split(',').map((entry) => entry.trim()).filter(Boolean).length;
+
+// The server drops people it cannot resolve and still answers error:false, so compare the stored IDs.
+function unresolvedPeople(payload, stored) {
+  return [['owner_ids', 'owner'], ['assign_ids', 'assignees']]
+    .filter(([field]) => payload[field] && idCount(stored?.[field]) < idCount(payload[field]))
+    .map(([, label]) => label);
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -142,6 +152,12 @@ async function main(argv, env) {
   const progress = cookie ? createProgressClient({ baseUrl: env.EOFFICE_BASE_URL, cookie }) : null;
   const doneStatus = STATUS_DISPLAY[batch.rules.done?.status ?? 'REVIEW'];
   const readBack = (item, parentId) => readTask(client, { title: item.title, parentId });
+  const linkFor = (id) => taskLink(id, { baseUrl: env.EOFFICE_BASE_URL, template: env.EOFFICE_TASK_URL_TEMPLATE });
+  const withLink = (result) => {
+    const link = result.externalId === undefined ? undefined : linkFor(result.externalId);
+    return link ? { ...result, link } : result;
+  };
+  let halted = false;
 
   async function create(item, parentId) {
     let created = false;
@@ -164,7 +180,7 @@ async function main(argv, env) {
   }
 
   // The server hides the report button on subtasks and on tasks that have subtasks.
-  async function complete(item, inserted, parentId, reportable) {
+  async function complete(item, inserted, reportable) {
     await sleep(settleMs);
     if (progress && reportable) {
       // The server refuses a report while the task is still PENDING.
@@ -176,7 +192,7 @@ async function main(argv, env) {
     } else {
       await updateTask(client, { id: inserted.id, status: doneStatus });
     }
-    const final = await readBack(item, parentId);
+    const final = await getItem(client, { id: inserted.id, raw: true });
     return {
       status: final?.status, percent: final?.percent, report: progress && reportable ? 'progress-report' : 'status-update-only',
     };
@@ -186,9 +202,28 @@ async function main(argv, env) {
     ? { ...base, submitted: false, created: true, error: `created but not finished: ${firstLine(err)}` }
     : { ...base, submitted: false, error: firstLine(err) });
 
+  // A task whose people cannot be verified stays at its default status and stops the batch.
+  async function checkPeople(item, base, id) {
+    let error;
+    try {
+      const missing = unresolvedPeople(item.payload, await getItem(client, { id, raw: true }));
+      if (!missing.length) return null;
+      error = `people not resolved: ${missing.join(',')}`;
+    } catch (err) {
+      error = `created but not finished: ${firstLine(err)}`;
+    }
+    halted = true;
+    const skipped = (item.children ?? []).map((c) => ({
+      summary: c.summary, title: c.title, submitted: false, skipped: HALTED_MESSAGE,
+    }));
+    const own = withLink({ ...base, submitted: false, created: true, externalId: id, error });
+    return skipped.length ? { ...own, children: skipped } : own;
+  }
+
   // Children are finished before the parent so the parent's report comes last.
   async function runItem(item, parentId, isChild = false) {
     const base = { summary: item.summary, title: item.title };
+    if (halted) return { ...base, submitted: false, skipped: HALTED_MESSAGE };
     if (item.repeated) return { ...base, submitted: false, skipped: 'duplicate title in batch' };
     let id = item.duplicate?.id;
     if (!item.duplicate) {
@@ -202,6 +237,10 @@ async function main(argv, env) {
         return blocked.length ? { ...own, children: blocked } : own;
       }
     }
+    if (!item.duplicate) {
+      const stopped = await checkPeople(item, base, id);
+      if (stopped) return stopped;
+    }
     const children = [];
     for (const child of item.children ?? []) children.push(await runItem(child, id, true));
     let own;
@@ -209,13 +248,14 @@ async function main(argv, env) {
       own = { ...base, submitted: false, skipped: 'already exists', externalId: id };
     } else {
       try {
-        own = { ...base, submitted: true, externalId: id, ...(await complete(item, { id }, parentId, !isChild && !item.children?.length)) };
+        own = { ...base, submitted: true, externalId: id, ...(await complete(item, { id }, !isChild && !item.children?.length)) };
       } catch (err) {
         err.created = true;
         own = failure(base, err);
       }
     }
-    return children.length ? { ...own, children } : own;
+    const linked = withLink(own);
+    return children.length ? { ...linked, children } : linked;
   }
 
   const results = [];

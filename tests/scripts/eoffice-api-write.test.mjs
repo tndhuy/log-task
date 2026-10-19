@@ -17,6 +17,12 @@ async function startServer() {
   let failNextGets = false;
   const updates = [];
   const reports = [];
+  const deletes = [];
+  const unresolved = new Set();
+  const keepOnDelete = new Set();
+  const flags = { failNextItem: false };
+  const peopleIds = (value) => String(value ?? '').split(',').map((name) => name.trim())
+    .filter((name) => name && !unresolved.has(name)).map((name) => 7000 + name.length).join(',');
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     let body = '';
@@ -62,6 +68,24 @@ async function startServer() {
       res.end(JSON.stringify({ error: false, total_item: rows.length, data: rows }));
       return;
     }
+    if (url.pathname === '/api/work/normal/item') {
+      if (flags.failNextItem) {
+        flags.failNextItem = false;
+        res.end(JSON.stringify({ error: true, code: 'x', message: 'item boom' }));
+        return;
+      }
+      const row = tasks.find((t) => String(t.ID) === url.searchParams.get('ID'));
+      res.end(JSON.stringify(row ? { error: false, data: row } : { error: true, message: 'Post not found' }));
+      return;
+    }
+    if (url.pathname === '/api/work/normal/delete' && req.method === 'POST') {
+      const form = Object.fromEntries(new URLSearchParams(body));
+      deletes.push(form);
+      const index = tasks.findIndex((t) => String(t.ID) === form.delIds);
+      if (index >= 0 && !keepOnDelete.has(form.delIds)) tasks.splice(index, 1);
+      res.end(JSON.stringify({ error: false }));
+      return;
+    }
     if (url.pathname === '/api/work/normal/update' && req.method === 'POST') {
       const form = Object.fromEntries(new URLSearchParams(body));
       updates.push(form);
@@ -78,7 +102,10 @@ async function startServer() {
         res.end(JSON.stringify({ error: true, code: 'invalid', message: 'bad title' }));
         return;
       }
-      const row = { ID: nextId++, title: form.title, parent_id: form.parent_id, project_id: 3869, status: 'PENDING', percent: 0 };
+      const row = {
+        ID: nextId++, title: form.title, parent_id: form.parent_id, project_id: 3869, status: 'PENDING', percent: 0,
+        created_by_id: 1, owner_ids: peopleIds(form.owner_ids), assign_ids: peopleIds(form.assign_ids) || null,
+      };
       tasks.push(row);
       if (form.title.includes('READBACK')) failNextGets = true;
       res.end(JSON.stringify({ error: false, data: { ID: row.ID } }));
@@ -89,7 +116,7 @@ async function startServer() {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
-  return { server, tasks, posts, updates, reports, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
+  return { server, tasks, posts, updates, reports, deletes, unresolved, keepOnDelete, flags, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
 }
 
 function run(args, env) {
@@ -463,5 +490,83 @@ test('a host listed in EOFFICE_UAT_HOSTS applies without --allow-production', as
     const r = await run(['create', '--apply', '--confirm-host', s.host, batchFile(['Task one'])], { ...env(s), EOFFICE_UAT_HOSTS: s.host });
     assert.equal(r.code, 0, r.err);
     assert.equal(s.posts.length, 1);
+  } finally { s.server.close(); }
+});
+
+const applyAll = (s, file) => run(['create', '--apply', '--allow-production', '--confirm-host', s.host, file], env(s));
+
+test('owner not resolved after insert: stop, no status update, later tasks not inserted', async () => {
+  const s = await startServer();
+  try {
+    s.unresolved.add('Ghost');
+    const file = batchFile(['One', 'Two'], { settings: { parent: 2089469, owner: 'Ghost', assignees: ['Second Person'], followers: [] } });
+    const r = await applyAll(s, file);
+    assert.equal(r.code, 1);
+    const [first, second] = lastLine(r.out);
+    assert.equal(first.created, true);
+    assert.equal(first.submitted, false);
+    assert.equal(typeof first.externalId, 'number');
+    assert.match(first.error, /^people not resolved: owner$/);
+    assert.equal(second.submitted, false);
+    assert.match(second.skipped, /batch stopped/);
+    assert.equal(s.updates.length, 0);
+    assert.equal(s.posts.length, 1);
+    noToken(r);
+  } finally { s.server.close(); }
+});
+
+test('partially resolved assignees count as not resolved', async () => {
+  const s = await startServer();
+  try {
+    s.unresolved.add('Ghost');
+    const file = batchFile(['One'], { settings: { parent: 2089469, owner: 'Owner Name', assignees: ['Owner Name', 'Ghost'], followers: [] } });
+    const r = await applyAll(s, file);
+    assert.equal(r.code, 1);
+    assert.match(lastLine(r.out)[0].error, /^people not resolved: assignees$/);
+    assert.equal(s.updates.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('a child whose people do not resolve stops the batch and skips later siblings', async () => {
+  const s = await startServer();
+  try {
+    s.unresolved.add('Ghost');
+    const dir = mkdtempSync(join(tmpdir(), 'eoffice-write-'));
+    const file = join(dir, 'batch.json');
+    writeFileSync(file, JSON.stringify({
+      rules, project: { ref: '1456', id: '3869' },
+      settings: { parent: 2089469, owner: 'Owner Name', assignees: ['Owner Name'], followers: [] },
+      tasks: [{
+        summary: 'Parent', startPlan: '2026-10-06', endPlan: '2026-10-09',
+        children: [
+          { summary: 'Child A', startPlan: '2026-10-06', endPlan: '2026-10-09' },
+          { summary: 'Child B', startPlan: '2026-10-06', endPlan: '2026-10-09' },
+        ],
+      }],
+    }));
+    const original = s.posts;
+    const origPush = original.push.bind(original);
+    original.push = (form) => { if (form.title.includes('Child A')) s.unresolved.add('Owner Name'); return origPush(form); };
+    const r = await applyAll(s, file);
+    assert.equal(r.code, 1);
+    const [parent] = lastLine(r.out);
+    assert.equal(parent.children[0].submitted, false);
+    assert.match(parent.children[0].error, /people not resolved/);
+    assert.match(parent.children[1].skipped, /batch stopped/);
+    assert.equal(s.posts.length, 2);
+  } finally { s.server.close(); }
+});
+
+test('a failing people check is reported as created but not finished and stops the batch', async () => {
+  const s = await startServer();
+  try {
+    s.flags.failNextItem = true;
+    const r = await applyAll(s, batchFile(['One', 'Two']));
+    assert.equal(r.code, 1);
+    const [first, second] = lastLine(r.out);
+    assert.equal(first.created, true);
+    assert.match(first.error, /created but not finished: item boom/);
+    assert.match(second.skipped, /batch stopped/);
+    assert.equal(s.updates.length, 0);
   } finally { s.server.close(); }
 });
