@@ -47,6 +47,28 @@ function validateDates(dates) {
   }
 }
 
+function validatePeople(people) {
+  if (!people || typeof people !== 'object' || Array.isArray(people)) {
+    throw new RulesError('rules.people must be an object of display name to numeric user ID');
+  }
+  for (const [name, id] of Object.entries(people)) {
+    if (!name.trim() || !Number.isInteger(id) || id <= 0) {
+      throw new RulesError(`rules.people["${name}"] must be a positive integer user ID`);
+    }
+  }
+}
+
+// The UI form takes user IDs, the API takes display names; this map is the bridge and is never guessed.
+export function toUserIds(names, people = {}) {
+  const list = Array.isArray(names) ? names : String(names ?? '').split(',');
+  const wanted = list.map((name) => name.trim()).filter(Boolean);
+  const missing = wanted.filter((name) => people[name] === undefined);
+  if (missing.length) {
+    throw new RulesError(`rules.people has no user ID for: ${missing.join(', ')} (needed for --via session)`);
+  }
+  return wanted.map((name) => people[name]);
+}
+
 export function validateRules(rules) {
   if (!rules || typeof rules !== 'object') throw new RulesError('rules is required');
   const template = rules.nameTemplate;
@@ -79,6 +101,7 @@ export function validateRules(rules) {
     throw new RulesError('rules.layer must be fixed (set a per-task "layer" in the batch to vary it)');
   }
   if (rules.dates !== undefined) validateDates(rules.dates);
+  if (rules.people !== undefined) validatePeople(rules.people);
   if (rules.done?.status !== undefined && rules.done.status !== 'REVIEW') {
     throw new RulesError(`rules.done.status must be REVIEW`);
   }

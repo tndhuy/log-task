@@ -8,9 +8,9 @@ import { loadDefaultEnv } from './lib/env-file.mjs';
 import {
   EofficeApiError, createClient, deleteTask, findDuplicate, findParents, getItem, insertTask, isUatHost, readTask, taskLink, updateTask,
 } from './lib/eoffice-api.mjs';
-import { createProgressClient } from './lib/eoffice-progress.mjs';
+import { createSessionClient } from './lib/eoffice-session.mjs';
 import {
-  RulesError, STATUS_DISPLAY, buildInsertPayload, toApiDate, validateRules,
+  RulesError, STATUS_DISPLAY, buildInsertPayload, toApiDate, toUserIds, validateRules,
 } from './lib/eoffice-rules.mjs';
 
 const USAGE = `Usage:
@@ -21,7 +21,7 @@ const USAGE = `Usage:
   eoffice-api-write.mjs set-dates --dry-run --project-id <rawId> --ids <id>[,<id>...] (--actual-from-plan | [--start d] [--end d] [--start-plan d] [--end-plan d])
   eoffice-api-write.mjs set-dates --apply --confirm-host <host> [--allow-production] [--session-from chrome|brave] --project-id <rawId> --ids ... (same date options)
   eoffice-api-write.mjs create --dry-run <batch.json>
-  eoffice-api-write.mjs create --apply --confirm-host <host> [--allow-production] [--session-from chrome|brave] <batch.json>`;
+  eoffice-api-write.mjs create --apply --confirm-host <host> [--allow-production] [--via api|session] [--session-from chrome|brave] <batch.json>`;
 
 function readBatch(file) {
   if (!file || file.startsWith('--')) throw new UsageError(USAGE);
@@ -187,7 +187,7 @@ async function runSetDates(client, args, env) {
 
   const cookie = env.EOFFICE_SESSION_COOKIE || (sessionFrom ? await cookieFromBrowser(sessionFrom, client.host) : '');
   if (!cookie) throw new UsageError('set-dates --apply needs a browser session: pass --session-from brave|chrome or set EOFFICE_SESSION_COOKIE');
-  const session = createProgressClient({ baseUrl: env.EOFFICE_BASE_URL, cookie });
+  const session = createSessionClient({ baseUrl: env.EOFFICE_BASE_URL, cookie });
   const settleMs = Number(env.EOFFICE_SETTLE_MS ?? 3000);
   let failed = false;
   for (const row of rows.filter((entry) => entry.result === 'pending')) {
@@ -297,6 +297,8 @@ async function main(argv, env) {
     throw new UsageError('--session-from must be chrome or brave');
   }
 
+  const via = flag(args, '--via') ?? 'api';
+  if (!['api', 'session'].includes(via)) throw new UsageError('--via must be api or session');
   const batch = readBatch(args.at(-1));
   const linkFor = makeLinker(env);
   const buildItem = async (task, parentId, seen) => {
@@ -307,9 +309,19 @@ async function main(argv, env) {
     seen.add(title);
     const duplicate = repeated ? null : await findDuplicate(client, { title, parentId });
     const reportDate = task.end ?? task.endPlan ?? task.startPlan;
+    const sessionFields = via === 'session' ? {
+      title,
+      projectId: batch.project?.id,
+      startPlan: payload.start_plan,
+      endPlan: payload.end_plan,
+      ownerIds: toUserIds(payload.owner_ids, batch.rules.people),
+      assigneeIds: toUserIds(payload.assign_ids, batch.rules.people),
+      followerIds: toUserIds(payload.follower_ids, batch.rules.people),
+    } : undefined;
+    if (sessionFields && !sessionFields.projectId) throw new RulesError('--via session needs batch.project.id (the raw project ID)');
     if (!reportDate) throw new RulesError('each task needs end, endPlan or startPlan (used as the report date)');
     return {
-      summary: task.summary, title, duplicate: duplicate && { ...duplicate, link: linkFor(duplicate.id) }, payload, repeated, reportDate, note: task.note ?? task.summary.trim(),
+      summary: task.summary, title, duplicate: duplicate && { ...duplicate, link: linkFor(duplicate.id) }, payload, session: sessionFields, repeated, reportDate, note: task.note ?? task.summary.trim(),
     };
   };
 
@@ -339,7 +351,10 @@ async function main(argv, env) {
 
   const settleMs = Number(env.EOFFICE_SETTLE_MS ?? 3000);
   const cookie = env.EOFFICE_SESSION_COOKIE || (sessionFrom ? await cookieFromBrowser(sessionFrom, client.host) : '');
-  const progress = cookie ? createProgressClient({ baseUrl: env.EOFFICE_BASE_URL, cookie }) : null;
+  if (via === 'session' && !cookie) {
+    throw new UsageError('--via session needs a browser session: pass --session-from brave|chrome or set EOFFICE_SESSION_COOKIE');
+  }
+  const progress = cookie ? createSessionClient({ baseUrl: env.EOFFICE_BASE_URL, cookie }) : null;
   const doneStatus = STATUS_DISPLAY[batch.rules.done?.status ?? 'REVIEW'];
   const readBack = (item, parentId) => readTask(client, { title: item.title, parentId });
   const withLink = (result) => {
@@ -351,14 +366,17 @@ async function main(argv, env) {
   async function create(item, parentId) {
     let created = false;
     try {
+      let newId;
       try {
-        await insertTask(client, { ...item.payload, parent_id: String(parentId) });
+        if (via === 'session') newId = await progress.addTask({ ...item.session, parentId });
+        else await insertTask(client, { ...item.payload, parent_id: String(parentId) });
         created = true;
       } catch (err) {
-        if (err.code !== 'network' && err.code !== 'non_json') throw err;
+        if (!['network', 'non_json', 'no_id'].includes(err.code)) throw err;
         created = Boolean(await readBack(item, parentId));
         if (!created) throw err;
       }
+      if (newId !== undefined) return { id: newId };
       const inserted = await readBack(item, parentId);
       if (!inserted) throw new Error('task not found');
       return inserted;
@@ -372,9 +390,11 @@ async function main(argv, env) {
   async function complete(item, inserted, reportable) {
     await sleep(settleMs);
     if (progress && reportable) {
-      // The server refuses a report while the task is still PENDING.
-      await updateTask(client, { id: inserted.id, status: STATUS_DISPLAY.DOING });
-      await sleep(settleMs);
+      // The server refuses a report while the task is still PENDING; the UI form already starts it in DOING.
+      if (via !== 'session') {
+        await updateTask(client, { id: inserted.id, status: STATUS_DISPLAY.DOING });
+        await sleep(settleMs);
+      }
       await progress.reportProgress({
         taskId: inserted.id, date: item.reportDate, percent: 100, note: item.note,
       });

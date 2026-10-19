@@ -174,6 +174,24 @@ Both are read through `GET /api/work/normal/item`; a missing task answers `Post 
   `{origin}/work-normal-normal/view?ID={id}`. Without it results carry no `link` and one hint line
   is printed. The ledger stores `externalId` only.
 
+## Creating as the signed-in user (`--via session`)
+
+The integration API always makes the creator "Admin Hệ Thống" and ignores `created_by_id`.
+`create --via session` posts the UI form instead (`POST /work-task-task/add?_json=1`, session cookie plus
+CSRF, like the progress report), so the creator is the user whose session it is, the task starts in `DOING`,
+and the response carries the new task's `redirect: work-normal-normal/view?ID=<id>`.
+
+- Needs `--session-from brave|chrome` (or `EOFFICE_SESSION_COOKIE`) and `batch.project.id` (the raw project ID).
+- The form takes numeric user IDs, so `rules.people` maps every display name used in owner, assignees and
+  followers to its ID, for example `"people": { "Trần Nguyễn Đang Huy": 8990 }`. A name without an entry stops the
+  run with exit 2, even in `--dry-run`, which prints the `session` fields that would be sent. Read the IDs from
+  `get --raw` of an existing task (`owner`, `assignees`).
+- Owners stay as the rules say; only the creator changes. `rules.flags` is ignored: the form's own defaults apply.
+- Finishing: a flat task gets the progress report at 100% (it moves to REVIEW by itself); a parent or child
+  gets a status update. The people check, duplicate guard and batch stop work as with the API.
+- The form's behaviour was observed once on production (task with creator 8990, department set); treat the
+  field names as unversioned UI, like the report route.
+
 ## Correcting actual dates (`set-dates`)
 
 The REVIEW status update stamps the actual dates with the run date (F2). `set-dates` fixes them

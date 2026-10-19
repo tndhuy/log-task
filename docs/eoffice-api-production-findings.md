@@ -36,6 +36,7 @@ every attempt in this run, not proven server behaviour. Open points are listed a
 - An `update` with `ID, owner_ids="7811", assign_ids="8990,7811", start, end` (no status)
   on 2133602 returned `error: false`, set `end` to 15/10, cleared `start` to `null`, and
   ignored the people. People in display-name form were not tried through `update`.
+- The full date behaviour, and the sequence that does produce correct actual dates, is in F8.
 
 ### F3. Tasks created by an API key belong to "Admin Hệ Thống"
 
@@ -85,6 +86,30 @@ every attempt in this run, not proven server behaviour. Open points are listed a
   check for a known `externalId`.
 - `get`, `detail`, `view`, `info`, `show`, `getone`, `get-detail` do not exist (F4).
 - The response carries no URL (`code: null`); a task link has to be built from a template.
+
+### F8. Actual dates follow status transitions; only the UI can set the actual start (2026-10-19)
+
+Observed on the eight One Nova tasks of the 2026-10-19 run (2135342–2135360, 2133680).
+
+| Call | Effect on actual dates |
+|---|---|
+| `update status="Đang thực hiện"` (DOING) | `start` = run date, `end` = `null`, `percent` = 0 |
+| `update status="Đang đánh giá"` (REVIEW) | `start` = `end` = run date (F2) |
+| `update` with `start` in `dd/mm/yyyy` (`14/10/2026`, also the run date `19/10/2026`), with or without `status`/`end`, task in DOING or REVIEW | `error: false`, `start` cleared to `null`; `end`, when sent, is kept |
+| `update` with `start` = `2026-10-14` | `error: false`, `start` cleared to `null` |
+| `update` with `start` carrying a time (`19/10/2026 08:00`, `2026-10-14 00:00:00`) or `mm/dd/yyyy` | refused: `Bắt đầu thực tế không hợp lệ (<value>)` |
+| Progress report (`POST /work-task-task/progress`, session) with `date_report` < actual `start` | refused: `Ngày bắt đầu không được lớn hơn ngày kết thúc` |
+| Progress report with `date_report` ≥ actual `start`, task in DOING | `end` = `date_report`, status REVIEW, `percent` 100, report record written |
+| Actual `start` edited by the owner in the UI while the task is DOING | kept; a later report keeps it |
+
+- Consequence: no integration-API call sets a past actual start. The sequence that produced
+  correct dates on all eight tasks was: `update` DOING (API) → owner edits the actual start in
+  the UI → progress report dated the evidence end date (session).
+- The current `create --apply` with a session (DOING → report at once) is refused for any task
+  whose report date is before the run date, because DOING stamps `start` with the run date.
+  Without a session (REVIEW update) both dates become the run date.
+- Which route the UI edit uses was not captured. `set-dates` (commit b0881bf) targets
+  `POST /work-task-task/realtime`, which is not yet verified on a real host (O6).
 
 ## Requested features
 
@@ -170,10 +195,16 @@ node eoffice-api-write.mjs get --ids <id>[,<id>...] [--raw]
 - ~~**O1** Task URL pattern~~ — answered: `{origin}/work-normal-normal/view?ID={id}` (R3). Still to
   confirm on UAT.
 - **O2** Does `insert` without the status update keep the sent actual dates? One supervised
-  task on UAT first, then production.
+  task on UAT first, then production. Partly moot (F8): any later DOING or REVIEW transition
+  restamps them, and a report needs DOING first.
 - **O3** Does `update` accept people as display names? Would allow fixing people without a delete.
 - **O4** Does `delIds` with a comma list work on `work/normal`? Not needed by R1 (one ID per call).
 - **O5** How the server resolves a display name shared by two users.
+- **O6** Does `set-dates` (`POST /work-task-task/realtime`, session) set the actual `start` of a
+  DOING task, as the UI edit does? If yes, the UI step in F8 can be automated. Its refusal hint
+  ("not an owner") is unverified: the 2026-10-19 UI edits were made by an owner (8990).
+- **O7** Does the actual start survive a report whose task was moved to DOING again later?
+  (Avoid: never move a reported task back to DOING.)
 
 ## Run record
 
@@ -182,4 +213,5 @@ node eoffice-api-write.mjs get --ids <id>[,<id>...] [--raw]
 | 2133602 B5 | usernames | created without people; `update` cleared `start`; deleted |
 | 2133644 B6 cherry-pick | numeric IDs | created without people; deleted (out of scope) |
 | 2133668 B7 cherry-pick | numeric IDs | created without people; deleted (out of scope) |
-| [2133680](https://eoffice.novagroup.vn/work-normal-normal/view?ID=2133680) B5 | display names | people correct; actual dates = run date; kept |
+| [2133680](https://eoffice.novagroup.vn/work-normal-normal/view?ID=2133680) B5 | display names | people correct; actual dates = run date; fixed 2026-10-19 by the F8 sequence (15/10 → 15/10) |
+| 2135342–2135360 (B1–B4, C1–C3, 2026-10-19) | display names | people correct; REVIEW update stamped 19/10; fixed by the F8 sequence. 2135351 also went through the failed `update start` probes before its UI edit |

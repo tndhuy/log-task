@@ -20,8 +20,9 @@ async function startServer() {
   const deletes = [];
   const unresolved = new Set();
   const keepOnDelete = new Set();
-  const flags = { failNextItem: false, ignoreRealtime: false };
+  const flags = { failNextItem: false, ignoreRealtime: false, dropOwnersOnAdd: false, noRedirectOnAdd: false };
   const realtimes = [];
+  const adds = [];
   const itemCalls = [];
   const peopleIds = (value) => String(value ?? '').split(',').map((name) => name.trim())
     .filter((name) => name && !unresolved.has(name)).map((name) => 7000 + name.length).join(',');
@@ -50,6 +51,27 @@ async function startServer() {
       }
       row.status = 'REVIEW'; row.percent = 100;
       res.end(JSON.stringify({ close: true, notice: 'Cập nhật thành công' }));
+      return;
+    }
+    if (url.pathname === '/work-task-task/add') {
+      const ok = req.headers.cookie === 'sess=1' && req.headers['csrf-token-cache'] === 'csrf-fresh-0123456789abcdef01234567';
+      if (!ok) {
+        res.end(JSON.stringify({ message: 'Bạn không có quyền thực hiện chức năng này' }));
+        return;
+      }
+      const fields = {};
+      for (const match of body.matchAll(/name="([^"]+)"\r\n\r\n([^\r]*)/g)) (fields[match[1]] ??= []).push(match[2]);
+      adds.push(fields);
+      const row = {
+        ID: nextId++, title: fields.title[0], parent_id: fields.parent_id[0], project_id: Number(fields.project_id[0]),
+        status: 'DOING', percent: 0, created_by_id: 8990,
+        owner_ids: flags.dropOwnersOnAdd ? '' : (fields['owner_ids[]'] ?? []).join(','),
+        assign_ids: (fields['assign_ids[]'] ?? []).join(',') || null,
+      };
+      tasks.push(row);
+      res.end(JSON.stringify(flags.noRedirectOnAdd
+        ? { close: true, notice: 'Created successfully' }
+        : { close: true, redirect: `work-normal-normal/view?ID=${row.ID}`, notice: 'Created successfully' }));
       return;
     }
     if (url.pathname === '/work-task-task/realtime') {
@@ -139,7 +161,7 @@ async function startServer() {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
-  return { server, tasks, posts, updates, reports, deletes, unresolved, keepOnDelete, flags, itemCalls, realtimes, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
+  return { server, tasks, posts, updates, reports, deletes, unresolved, keepOnDelete, flags, itemCalls, realtimes, adds, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
 }
 
 function run(args, env) {
@@ -919,5 +941,128 @@ test('set-dates rejects bad options with exit 2', async () => {
       const r = await dates(s, [...base, ...extra]);
       assert.equal(r.code, 2, extra.join(' '));
     }
+  } finally { s.server.close(); }
+});
+
+const people = { 'Owner Name': 1, 'Second Person': 2 };
+const sessionRules = { ...rules, people };
+const viaSession = (s, file, extra = sess) => run(
+  ['create', '--apply', '--allow-production', '--confirm-host', s.host, '--via', 'session', file], { ...env(s), ...extra },
+);
+
+test('--via session dry-run shows the UI fields with numeric user ids and sends nothing', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(['create', '--dry-run', '--via', 'session', batchFile(['Task one'], { rulesOverride: sessionRules })], env(s));
+    assert.equal(r.code, 0, r.err);
+    const [item] = JSON.parse(r.out).plan;
+    assert.deepEqual(item.session, {
+      title: item.title, projectId: '3869', startPlan: '06/10/2026', endPlan: '09/10/2026',
+      ownerIds: [1], assigneeIds: [1, 2], followerIds: [],
+    });
+    assert.equal(s.posts.length + s.adds.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('--via session refuses a name that rules.people does not map, before any call', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(['create', '--dry-run', '--via', 'session', batchFile(['Task one'])], env(s));
+    assert.equal(r.code, 2);
+    assert.match(r.err, /rules\.people has no user ID for: Owner Name/);
+  } finally { s.server.close(); }
+});
+
+test('--via session apply needs a browser session and rejects unknown values', async () => {
+  const s = await startServer();
+  try {
+    const file = batchFile(['Task one'], { rulesOverride: sessionRules });
+    const noSession = await viaSession(s, file, { EOFFICE_SESSION_COOKIE: '' });
+    assert.equal(noSession.code, 2);
+    assert.match(noSession.err, /browser session/);
+    const bad = await run(['create', '--dry-run', '--via', 'soap', file], env(s));
+    assert.equal(bad.code, 2);
+    assert.equal(s.adds.length + s.posts.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('--via session creates a flat task as the signed-in user and finishes it with a progress report', async () => {
+  const s = await startServer();
+  try {
+    const r = await viaSession(s, batchFile(['Task one'], { rulesOverride: sessionRules }));
+    assert.equal(r.code, 0, r.err);
+    const [result] = lastLine(r.out);
+    assert.equal(result.submitted, true);
+    assert.equal(result.report, 'progress-report');
+    assert.equal(result.status, 'REVIEW');
+    assert.equal(s.posts.length, 0);
+    assert.deepEqual(s.updates, []);
+    assert.equal(s.reports.length, 1);
+    const [fields] = s.adds;
+    assert.deepEqual(fields['owner_ids[]'], ['1']);
+    assert.deepEqual(fields['assign_ids[]'], ['1', '2']);
+    assert.equal(fields.project_id[0], '3869');
+    assert.equal(fields.parent_id[0], '2089469');
+    assert.equal(s.tasks[0].created_by_id, 8990);
+    assert.equal((r.out + r.err).includes('sess=1'), false);
+  } finally { s.server.close(); }
+});
+
+test('--via session creates children under the new parent and finishes them with a status update', async () => {
+  const s = await startServer();
+  try {
+    const dir = mkdtempSync(join(tmpdir(), 'eoffice-write-'));
+    const file = join(dir, 'batch.json');
+    writeFileSync(file, JSON.stringify({
+      rules: sessionRules, project: { ref: '1456', id: '3869' },
+      settings: { parent: 2089469, owner: 'Owner Name', assignees: ['Owner Name'], followers: [] },
+      tasks: [{ summary: 'Parent', startPlan: '2026-10-06', endPlan: '2026-10-09', children: [{ summary: 'Child', startPlan: '2026-10-06', endPlan: '2026-10-07' }] }],
+    }));
+    const r = await viaSession(s, file);
+    assert.equal(r.code, 0, r.err);
+    const [parent] = lastLine(r.out);
+    assert.equal(parent.children[0].submitted, true);
+    assert.equal(s.adds[1].parent_id[0], String(parent.externalId));
+    assert.equal(s.updates.every((u) => u.status === 'Đang đánh giá'), true);
+    assert.equal(s.reports.length, 0);
+    assert.deepEqual(s.tasks.map((t) => t.status), ['REVIEW', 'REVIEW']);
+  } finally { s.server.close(); }
+});
+
+test('--via session stops the batch when the server drops the owners', async () => {
+  const s = await startServer();
+  try {
+    s.flags.dropOwnersOnAdd = true;
+    const r = await viaSession(s, batchFile(['One', 'Two'], { rulesOverride: sessionRules }));
+    assert.equal(r.code, 1);
+    const [first, second] = lastLine(r.out);
+    assert.match(first.error, /^people not resolved: owner$/);
+    assert.match(second.skipped, /batch stopped/);
+    assert.equal(s.adds.length, 1);
+    assert.equal(s.reports.length + s.updates.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('--via session falls back to a title lookup when the response carries no id', async () => {
+  const s = await startServer();
+  try {
+    s.flags.noRedirectOnAdd = true;
+    const r = await viaSession(s, batchFile(['Task one'], { rulesOverride: sessionRules }));
+    assert.equal(r.code, 0, r.err);
+    assert.equal(lastLine(r.out)[0].submitted, true);
+    assert.equal(s.adds.length, 1);
+  } finally { s.server.close(); }
+});
+
+test('a rejected session on --via session creates nothing and says so', async () => {
+  const s = await startServer();
+  try {
+    const r = await viaSession(s, batchFile(['Task one'], { rulesOverride: sessionRules }), { EOFFICE_SESSION_COOKIE: 'sess=wrong' });
+    assert.equal(r.code, 1);
+    const [result] = lastLine(r.out);
+    assert.equal(result.submitted, false);
+    assert.equal(result.created, undefined);
+    assert.match(result.error, /Task creation refused/);
+    assert.equal(s.tasks.length, 0);
   } finally { s.server.close(); }
 });

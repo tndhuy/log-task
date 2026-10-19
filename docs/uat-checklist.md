@@ -36,6 +36,8 @@ Use a UAT host and a UAT token with write permission on `work-normal-normal`.
 
 ## Production (eoffice.novagroup.vn)
 
+- [x] `POST /work-task-task/add?_json=1` with the session creates a task whose creator is the signed-in user (10100 probe, deleted).
+
 - [x] People resolve by display name, not by username or numeric ID (F1; task 2133680).
 - [x] `insert` answers `error: false` even when people are dropped (F1); the CLI checks by read-back.
 - [x] `delete` with `delIds=<one id>` removes a task; `item` then answers `Post not found` (F5, F7).
