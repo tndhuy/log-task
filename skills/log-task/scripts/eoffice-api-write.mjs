@@ -323,7 +323,7 @@ async function main(argv, env) {
       const hit = await progress.findByTitle({ title, parentId });
       return hit && { id: hit.id, title: hit.title };
     },
-    findByTitle: ({ title, parentId }) => progress.findByTitle({ title, parentId, refresh: true }),
+    findByTitle: ({ title, parentId }) => progress.findByTitle({ title, parentId }),
     item: ({ id, people = false }) => progress.readTask({ id, people }),
   };
   const linkFor = makeLinker(env);

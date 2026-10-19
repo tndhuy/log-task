@@ -57,7 +57,8 @@ async function startServer() {
     const sessionOk = req.headers.cookie === 'sess=1';
     if (url.pathname === '/work-normal-normal' && url.searchParams.get('v') === 'list') {
       if (!sessionOk) { res.end(JSON.stringify({ message: 'Bạn không có quyền thực hiện chức năng này' })); return; }
-      const mine = tasks.filter((t) => t.created_by_id === 8990);
+      const needle = url.searchParams.get('s');
+      const mine = tasks.filter((t) => t.created_by_id === 8990 && (!needle || t.title.includes(needle)));
       const page = Number(url.searchParams.get('p') ?? 1);
       const rowsHtml = mine.slice((page - 1) * 50, page * 50).map((t) => `{"view":"list","ID":${t.ID},"vals":{"title":${JSON.stringify(t.title)},"owner_ids":"${t.owner_ids}","assign_ids":"${t.assign_ids ?? ''}","status":"${t.status}","percent":${t.percent},"start_plan":"06/10/2026"},"fields":{"title":"<a class=table-sub-title href=/work-normal-normal/view?ID=${t.parent_id}>Parent</a>"}}`).join(',');
       res.end(`<elem data-props='{"rows":[${rowsHtml}],"page":{"total":${mine.length},"current":${page},"range":50}}'></elem>`);

@@ -174,13 +174,13 @@ export function createSessionClient({ baseUrl, cookie, fetchImpl = globalThis.fe
     return { status: res.status, text: scrub(await res.text()) };
   }
 
-  // The search parameter of the list is unknown, so read every task assigned to the user (tab assign_all) page by page.
-  let listCache;
-  async function listTasks({ refresh = false } = {}) {
-    if (listCache && !refresh) return listCache;
+  // The list search box sends `s=<text>` and only takes effect with an explicit tab; all_all covers every task the
+  // user can see, so a duplicate made by anyone is found.
+  async function listTasks({ search, tab = 'all_all' } = {}) {
     const rows = [];
     for (let page = 1; page <= LIST_PAGES; page += 1) {
-      const query = new URLSearchParams({ v: 'list', tab: 'assign_all', _json: '1' });
+      const query = new URLSearchParams({ v: 'list', tab, _json: '1' });
+      if (search) query.set('s', search);
       if (page > 1) query.set('p', String(page));
       const { status, text } = await getText(`${LIST}?${query}`, LIST);
       if (status !== 200) throw new EofficeApiError(`Task list refused (HTTP ${status})`, { code: 'session' });
@@ -189,12 +189,11 @@ export function createSessionClient({ baseUrl, cookie, fetchImpl = globalThis.fe
       const range = Number(/"page":\{"total":\d+,"current":\d+,"range":(\d+)/.exec(text)?.[1] ?? 50);
       if (batch.length < range) break;
     }
-    listCache = rows;
     return rows;
   }
 
-  const findByTitle = async ({ title, parentId, refresh = false }) => (
-    (await listTasks({ refresh })).find((row) => row.title === title && String(row.parentId) === String(parentId)) ?? null
+  const findByTitle = async ({ title, parentId }) => (
+    (await listTasks({ search: title })).find((row) => row.title === title && String(row.parentId) === String(parentId)) ?? null
   );
 
   // Status, percent and actual end come from the detail page; people come from the edit form, which only opens while
