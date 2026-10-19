@@ -745,3 +745,36 @@ test('delete needs a project id and exactly one of --dry-run or --apply', async 
     assert.equal(viaEnv.code, 0, viaEnv.err);
   } finally { s.server.close(); }
 });
+
+test('apply results carry a link when the template is set and omit it with one hint when not', async () => {
+  const s = await startServer();
+  try {
+    const withTemplate = await run(
+      ['create', '--apply', '--allow-production', '--confirm-host', s.host, batchFile(['Linked one'])],
+      { ...env(s), EOFFICE_TASK_URL_TEMPLATE: TEMPLATE },
+    );
+    const [linked] = lastLine(withTemplate.out);
+    assert.equal(linked.link, `${s.url}/work-normal-normal/view?ID=${linked.externalId}`);
+    assert.doesNotMatch(withTemplate.err, /EOFFICE_TASK_URL_TEMPLATE/);
+
+    const without = await applyAll(s, batchFile(['Linked two', 'Linked three']));
+    const results = lastLine(without.out);
+    assert.equal(results.every((row) => !('link' in row)), true);
+    assert.equal(without.err.split('EOFFICE_TASK_URL_TEMPLATE').length - 1, 1);
+  } finally { s.server.close(); }
+});
+
+test('an existing task keeps its link in the dry-run plan and in the skipped result', async () => {
+  const s = await startServer();
+  try {
+    const file = batchFile(['Again']);
+    await applyAll(s, file);
+    const extra = { ...env(s), EOFFICE_TASK_URL_TEMPLATE: TEMPLATE };
+    const plan = JSON.parse((await run(['create', '--dry-run', file], extra)).out).plan[0];
+    assert.equal(plan.duplicate.link, `${s.url}/work-normal-normal/view?ID=${plan.duplicate.id}`);
+    const rerun = await run(['create', '--apply', '--allow-production', '--confirm-host', s.host, file], extra);
+    const [skipped] = lastLine(rerun.out);
+    assert.equal(skipped.skipped, 'already exists');
+    assert.equal(skipped.link, `${s.url}/work-normal-normal/view?ID=${skipped.externalId}`);
+  } finally { s.server.close(); }
+});

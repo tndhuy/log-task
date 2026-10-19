@@ -36,3 +36,9 @@ test('keeps the placeholder when no email is given', () => {
   initSetup({ dataDir, assetsDir });
   assert.ok(fs.readFileSync(path.join(dataDir, 'projects.json'), 'utf8').includes('you@example.com'));
 });
+
+test('the generated env file offers the task link template as a commented example', () => {
+  const dataDir = tmp();
+  initSetup({ dataDir, assetsDir });
+  assert.match(fs.readFileSync(path.join(dataDir, 'eoffice.env'), 'utf8'), /^# EOFFICE_TASK_URL_TEMPLATE=\{origin\}\/work-normal-normal\/view\?ID=\{id\}$/m);
+});

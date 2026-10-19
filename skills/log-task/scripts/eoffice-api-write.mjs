@@ -210,6 +210,7 @@ async function main(argv, env) {
   }
 
   const batch = readBatch(args.at(-1));
+  const linkFor = makeLinker(env);
   const buildItem = async (task, parentId, seen) => {
     const { title, payload } = buildInsertPayload(task, {
       ...batch, settings: { ...batch.settings, parent: parentId },
@@ -220,7 +221,7 @@ async function main(argv, env) {
     const reportDate = task.end ?? task.endPlan ?? task.startPlan;
     if (!reportDate) throw new RulesError('each task needs end, endPlan or startPlan (used as the report date)');
     return {
-      summary: task.summary, title, duplicate, payload, repeated, reportDate, note: task.note ?? task.summary.trim(),
+      summary: task.summary, title, duplicate: duplicate && { ...duplicate, link: linkFor(duplicate.id) }, payload, repeated, reportDate, note: task.note ?? task.summary.trim(),
     };
   };
 
@@ -253,7 +254,6 @@ async function main(argv, env) {
   const progress = cookie ? createProgressClient({ baseUrl: env.EOFFICE_BASE_URL, cookie }) : null;
   const doneStatus = STATUS_DISPLAY[batch.rules.done?.status ?? 'REVIEW'];
   const readBack = (item, parentId) => readTask(client, { title: item.title, parentId });
-  const linkFor = makeLinker(env);
   const withLink = (result) => {
     const link = result.externalId === undefined ? undefined : linkFor(result.externalId);
     return link ? { ...result, link } : result;
