@@ -21,6 +21,7 @@ async function startServer() {
   const unresolved = new Set();
   const keepOnDelete = new Set();
   const flags = { failNextItem: false };
+  const itemCalls = [];
   const peopleIds = (value) => String(value ?? '').split(',').map((name) => name.trim())
     .filter((name) => name && !unresolved.has(name)).map((name) => 7000 + name.length).join(',');
   const server = http.createServer(async (req, res) => {
@@ -69,6 +70,8 @@ async function startServer() {
       return;
     }
     if (url.pathname === '/api/work/normal/item') {
+      const { access_token: _token, ...query } = Object.fromEntries(url.searchParams);
+      itemCalls.push(query);
       if (flags.failNextItem) {
         flags.failNextItem = false;
         res.end(JSON.stringify({ error: true, code: 'x', message: 'item boom' }));
@@ -116,7 +119,7 @@ async function startServer() {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
-  return { server, tasks, posts, updates, reports, deletes, unresolved, keepOnDelete, flags, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
+  return { server, tasks, posts, updates, reports, deletes, unresolved, keepOnDelete, flags, itemCalls, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
 }
 
 function run(args, env) {
@@ -568,5 +571,177 @@ test('a failing people check is reported as created but not finished and stops t
     assert.match(first.error, /created but not finished: item boom/);
     assert.match(second.skipped, /batch stopped/);
     assert.equal(s.updates.length, 0);
+  } finally { s.server.close(); }
+});
+
+const seed = (s, overrides = {}) => {
+  const row = {
+    ID: 5000, title: 'Seeded task', parent_id: '1', project_id: 3869, status: 'PENDING', percent: 0,
+    created_by_id: 1, owner_ids: '7001', assign_ids: '7001,7002', start_plan: '2026-10-06', end_plan: '2026-10-09',
+    ...overrides,
+  };
+  s.tasks.push(row);
+  return row;
+};
+const TEMPLATE = '{origin}/work-normal-normal/view?ID={id}';
+
+test('get prints one entry per id with a link, exit 0 when all are found', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    seed(s, { ID: 5001, title: 'Second' });
+    const r = await run(['get', '--ids', '5000,5001'], { ...env(s), EOFFICE_TASK_URL_TEMPLATE: TEMPLATE });
+    assert.equal(r.code, 0, r.err);
+    const rows = JSON.parse(r.out);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].found, true);
+    assert.equal(rows[0].title, 'Seeded task');
+    assert.equal(rows[0].startPlan, '2026-10-06');
+    assert.equal(rows[0].parentId, '1');
+    assert.equal(rows[0].link, `${s.url}/work-normal-normal/view?ID=5000`);
+    assert.equal(s.posts.length, 0);
+    noToken(r);
+  } finally { s.server.close(); }
+});
+
+test('get reports found:false for a missing id and exits 1', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    const r = await run(['get', '--ids', '5000,424242'], env(s));
+    assert.equal(r.code, 1);
+    const rows = JSON.parse(r.out);
+    assert.deepEqual(rows.map((row) => row.found), [true, false]);
+    assert.equal(rows[1].id, 424242);
+  } finally { s.server.close(); }
+});
+
+test('get --raw asks for raw values, plain get does not', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    await run(['get', '--ids', '5000'], env(s));
+    await run(['get', '--ids', '5000', '--raw'], env(s));
+    assert.deepEqual(s.itemCalls, [{ ID: '5000' }, { ID: '5000', field_raws: 'allfield' }]);
+  } finally { s.server.close(); }
+});
+
+test('get rejects empty, non-numeric and missing --ids with exit 2', async () => {
+  const s = await startServer();
+  try {
+    for (const args of [['get', '--ids', ''], ['get', '--ids', 'abc'], ['get', '--ids', '1,x'], ['get']]) {
+      const r = await run(args, env(s));
+      assert.equal(r.code, 2, args.join(' '));
+    }
+    assert.equal(s.itemCalls.length, 0);
+  } finally { s.server.close(); }
+});
+
+const del = (s, args, extra = {}) => run(['delete', ...args], { ...env(s), ...extra });
+const applyDel = (s, ids, more = []) => del(s, ['--apply', '--confirm-host', s.host, '--allow-production', '--project-id', '3869', ...more, '--ids', ids]);
+
+test('delete --dry-run classifies each id and calls no delete', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    seed(s, { ID: 5001, project_id: 9999 });
+    seed(s, { ID: 5002, created_by_id: 8990 });
+    const r = await del(s, ['--dry-run', '--project-id', '3869', '--ids', '5000,5001,5002,424242']);
+    assert.equal(r.code, 1);
+    const rows = JSON.parse(r.out);
+    assert.deepEqual(rows.map((row) => row.result), ['deletable', 'refused', 'refused', 'absent']);
+    assert.match(rows[1].reason, /project_id 9999/);
+    assert.match(rows[2].reason, /created_by_id 8990/);
+    assert.equal(s.deletes.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('delete --apply removes a task one id per call and confirms it is gone', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    seed(s, { ID: 5001 });
+    const r = await applyDel(s, '5000,5001');
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(JSON.parse(r.out).map((row) => row.result), ['deleted', 'deleted']);
+    assert.deepEqual(s.deletes, [{ delIds: '5000' }, { delIds: '5001' }]);
+    assert.equal(s.tasks.length, 0);
+    noToken(r);
+  } finally { s.server.close(); }
+});
+
+test('delete of an already deleted id is absent and makes no delete call', async () => {
+  const s = await startServer();
+  try {
+    const r = await applyDel(s, '424242');
+    assert.equal(r.code, 0);
+    assert.equal(JSON.parse(r.out)[0].result, 'absent');
+    assert.equal(s.deletes.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('delete apply stops before any call when one id is in another project', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    seed(s, { ID: 5001, project_id: 9999 });
+    const r = await applyDel(s, '5000,5001');
+    assert.equal(r.code, 2);
+    assert.equal(JSON.parse(r.out)[1].result, 'refused');
+    assert.equal(s.deletes.length, 0);
+    assert.equal(s.tasks.length, 2);
+  } finally { s.server.close(); }
+});
+
+test('a hand-made task is refused unless --allow-foreign is given', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { created_by_id: 8990 });
+    const refused = await applyDel(s, '5000');
+    assert.equal(refused.code, 2);
+    assert.equal(s.deletes.length, 0);
+    const allowed = await applyDel(s, '5000', ['--allow-foreign']);
+    assert.equal(allowed.code, 0, allowed.err);
+    assert.equal(JSON.parse(allowed.out)[0].result, 'deleted');
+  } finally { s.server.close(); }
+});
+
+test('error:false but the task is still there is reported and stops the run', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    seed(s, { ID: 5001 });
+    s.keepOnDelete.add('5000');
+    const r = await applyDel(s, '5000,5001');
+    assert.equal(r.code, 1);
+    const rows = JSON.parse(r.out);
+    assert.equal(rows[0].result, 'still present');
+    assert.equal(rows[1].result, 'deletable');
+    assert.match(rows[1].reason, /not attempted/);
+    assert.deepEqual(s.deletes, [{ delIds: '5000' }]);
+  } finally { s.server.close(); }
+});
+
+test('delete apply needs --confirm-host, and production needs --allow-production', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    const noHost = await del(s, ['--apply', '--allow-production', '--project-id', '3869', '--ids', '5000']);
+    assert.equal(noHost.code, 2);
+    const noProd = await del(s, ['--apply', '--confirm-host', s.host, '--project-id', '3869', '--ids', '5000']);
+    assert.equal(noProd.code, 2);
+    assert.match(noProd.err, /allow-production/);
+    assert.equal(s.deletes.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('delete needs a project id and exactly one of --dry-run or --apply', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    assert.equal((await del(s, ['--dry-run', '--ids', '5000'])).code, 2);
+    assert.equal((await del(s, ['--project-id', '3869', '--ids', '5000'])).code, 2);
+    const viaEnv = await del(s, ['--dry-run', '--ids', '5000'], { EOFFICE_PROJECT_ID: '3869' });
+    assert.equal(viaEnv.code, 0, viaEnv.err);
   } finally { s.server.close(); }
 });

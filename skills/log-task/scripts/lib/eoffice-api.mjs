@@ -11,6 +11,7 @@ const GETS = '/api/work/normal/gets';
 const INSERT = '/api/work/normal/insert';
 const UPDATE = '/api/work/normal/update';
 const ITEM = '/api/work/normal/item';
+const DELETE = '/api/work/normal/delete';
 const NOT_FOUND_MESSAGE = 'Post not found';
 
 export function createClient({ baseUrl, token, fetchImpl = globalThis.fetch }) {
@@ -125,6 +126,12 @@ export function taskLink(id, { baseUrl, template }) {
   return template
     .replaceAll('{origin}', new URL(baseUrl).origin)
     .replaceAll('{id}', encodeURIComponent(String(id)));
+}
+
+// One ID per call: a comma list was never verified, and a wrong ID must not take others with it.
+export async function deleteTask(client, { id }) {
+  if (!/^\d+$/.test(String(id))) throw new EofficeApiError(`Not a task ID: ${id}`, { code: 'bad_id' });
+  return client.call('POST', DELETE, { delIds: String(id) });
 }
 
 export function updateTask(client, { id, status }) {

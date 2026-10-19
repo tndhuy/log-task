@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  EofficeApiError, createClient, findParents, findDuplicate, getItem, insertTask, isUatHost, taskLink,
+  EofficeApiError, createClient, findParents, findDuplicate, deleteTask, getItem, insertTask, isUatHost, taskLink,
 } from '../../../skills/log-task/scripts/lib/eoffice-api.mjs';
 
 const TOKEN = 'secret-token-123';
@@ -196,4 +196,16 @@ test('taskLink fills {origin} and {id}, and is undefined without a template', ()
   assert.equal(taskLink(2133680, { baseUrl, template }), 'https://eoffice.novagroup.vn/work-normal-normal/view?ID=2133680');
   assert.equal(taskLink(1, { baseUrl, template: '' }), undefined);
   assert.equal(taskLink(1, { baseUrl, template: undefined }), undefined);
+});
+
+test('deleteTask posts delIds with a single id and refuses lists', async () => {
+  const fetchImpl = fakeFetch(() => ({ body: { error: false } }));
+  const c = createClient({ baseUrl: 'https://eoffice-uat.example.vn', token: TOKEN, fetchImpl });
+  await deleteTask(c, { id: 55 });
+  const { url, init } = fetchImpl.calls[0];
+  assert.equal(url.pathname, '/api/work/normal/delete');
+  assert.equal(init.method, 'POST');
+  assert.equal(init.body, 'delIds=55');
+  await assert.rejects(() => deleteTask(c, { id: '55,56' }), (e) => e.code === 'bad_id');
+  assert.equal(fetchImpl.calls.length, 1);
 });

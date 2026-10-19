@@ -6,7 +6,7 @@ import { UsageError, flag } from './lib/cli-args.mjs';
 import { resolveDataDir } from './lib/data-dir.mjs';
 import { loadDefaultEnv } from './lib/env-file.mjs';
 import {
-  EofficeApiError, createClient, findDuplicate, findParents, getItem, insertTask, isUatHost, readTask, taskLink, updateTask,
+  EofficeApiError, createClient, deleteTask, findDuplicate, findParents, getItem, insertTask, isUatHost, readTask, taskLink, updateTask,
 } from './lib/eoffice-api.mjs';
 import { createProgressClient } from './lib/eoffice-progress.mjs';
 import {
@@ -15,6 +15,9 @@ import {
 
 const USAGE = `Usage:
   eoffice-api-write.mjs search-parent --project-id <rawId> --search <text>
+  eoffice-api-write.mjs get --ids <id>[,<id>...] [--raw]
+  eoffice-api-write.mjs delete --dry-run --project-id <rawId> --ids <id>[,<id>...]
+  eoffice-api-write.mjs delete --apply --confirm-host <host> [--allow-production] [--allow-foreign] --project-id <rawId> --ids <id>[,<id>...]
   eoffice-api-write.mjs create --dry-run <batch.json>
   eoffice-api-write.mjs create --apply --confirm-host <host> [--allow-production] [--session-from chrome|brave] <batch.json>`;
 
@@ -71,6 +74,26 @@ function unresolvedPeople(payload, stored) {
     .map(([, label]) => label);
 }
 
+const HINT_TEMPLATE = 'hint: set EOFFICE_TASK_URL_TEMPLATE (for example {origin}/work-normal-normal/view?ID={id}) to include task links';
+
+function makeLinker(env) {
+  let hinted = false;
+  return (id) => {
+    const link = taskLink(id, { baseUrl: env.EOFFICE_BASE_URL, template: env.EOFFICE_TASK_URL_TEMPLATE });
+    if (link === undefined && !hinted) {
+      hinted = true;
+      console.error(HINT_TEMPLATE);
+    }
+    return link;
+  };
+}
+
+function parseIds(args) {
+  const ids = flag(args, '--ids', { required: true }).split(',').map((entry) => entry.trim());
+  if (ids.some((entry) => !/^\d+$/.test(entry))) throw new UsageError('--ids needs comma-separated numeric task IDs');
+  return [...new Set(ids)];
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const firstLine = (err) => String(err?.message ?? err).split('\n')[0];
 
@@ -83,9 +106,84 @@ function assertApplyAllowed(args, client, env) {
   }
 }
 
+const orUndefined = (value) => (value === null || value === '' ? undefined : value);
+
+async function runGet(client, args, env) {
+  const raw = args.includes('--raw');
+  const linkFor = makeLinker(env);
+  const rows = [];
+  for (const id of parseIds(args)) {
+    const data = await getItem(client, { id, raw });
+    const link = linkFor(id);
+    rows.push(data ? {
+      id: Number(id), found: true, title: data.title, status: data.status, percent: data.percent,
+      startPlan: data.start_plan, endPlan: data.end_plan, start: data.start, end: data.end,
+      owner: orUndefined(data.owner_ids), assignees: orUndefined(data.assign_ids),
+      creator: data.created_by_id, parentId: data.parent_id, link,
+    } : { id: Number(id), found: false, link });
+  }
+  console.log(JSON.stringify(rows, null, 2));
+  return rows.every((row) => row.found) ? 0 : 1;
+}
+
+const API_ACCOUNT_ID = 1;
+
+function classify(data, { projectId, allowForeign }) {
+  if (!data) return { result: 'absent' };
+  if (String(data.project_id) !== String(projectId)) {
+    return { result: 'refused', reason: `project_id ${data.project_id} is not ${projectId}` };
+  }
+  if (Number(data.created_by_id) !== API_ACCOUNT_ID && !allowForeign) {
+    return { result: 'refused', reason: `created_by_id ${data.created_by_id} is not the API account; --allow-foreign overrides` };
+  }
+  return { result: 'deletable' };
+}
+
+async function runDelete(client, args, env) {
+  const apply = args.includes('--apply');
+  if (apply === args.includes('--dry-run')) throw new UsageError('delete needs exactly one of --dry-run or --apply');
+  const projectId = flag(args, '--project-id') ?? env.EOFFICE_PROJECT_ID;
+  if (!projectId) throw new UsageError('delete needs --project-id <raw project id> or EOFFICE_PROJECT_ID');
+  if (apply) assertApplyAllowed(args, client, env);
+  const ids = parseIds(args);
+  const allowForeign = args.includes('--allow-foreign');
+  const linkFor = makeLinker(env);
+
+  const rows = [];
+  for (const id of ids) {
+    const data = await getItem(client, { id, raw: true });
+    rows.push({ id: Number(id), title: data?.title, link: linkFor(id), ...classify(data, { projectId, allowForeign }) });
+  }
+  const refused = rows.some((row) => row.result === 'refused');
+  if (!apply || refused) {
+    console.log(JSON.stringify(rows, null, 2));
+    return refused ? (apply ? 2 : 1) : 0;
+  }
+
+  const settleMs = Number(env.EOFFICE_SETTLE_MS ?? 3000);
+  let stopped = false;
+  for (const row of rows.filter((entry) => entry.result === 'deletable')) {
+    if (stopped) {
+      row.reason = 'not attempted: an earlier delete is still present';
+      continue;
+    }
+    try {
+      await deleteTask(client, { id: row.id });
+      await sleep(settleMs);
+      row.result = (await getItem(client, { id: row.id, raw: true })) ? 'still present' : 'deleted';
+    } catch (err) {
+      row.result = 'still present';
+      row.error = firstLine(err);
+    }
+    if (row.result === 'still present') stopped = true;
+  }
+  console.log(JSON.stringify(rows, null, 2));
+  return rows.some((row) => row.result === 'still present') ? 1 : 0;
+}
+
 async function main(argv, env) {
   const [command, ...args] = argv;
-  if (command !== 'search-parent' && command !== 'create') throw new UsageError(USAGE);
+  if (!['search-parent', 'create', 'get', 'delete'].includes(command)) throw new UsageError(USAGE);
   const client = createClient({ baseUrl: env.EOFFICE_BASE_URL, token: env.EOFFICE_ACCESS_TOKEN });
 
   if (command === 'search-parent') {
@@ -96,6 +194,9 @@ async function main(argv, env) {
     console.log(JSON.stringify(rows, null, 2));
     return 0;
   }
+
+  if (command === 'get') return runGet(client, args, env);
+  if (command === 'delete') return runDelete(client, args, env);
 
   const apply = args.includes('--apply');
   if (apply === args.includes('--dry-run')) {
@@ -152,7 +253,7 @@ async function main(argv, env) {
   const progress = cookie ? createProgressClient({ baseUrl: env.EOFFICE_BASE_URL, cookie }) : null;
   const doneStatus = STATUS_DISPLAY[batch.rules.done?.status ?? 'REVIEW'];
   const readBack = (item, parentId) => readTask(client, { title: item.title, parentId });
-  const linkFor = (id) => taskLink(id, { baseUrl: env.EOFFICE_BASE_URL, template: env.EOFFICE_TASK_URL_TEMPLATE });
+  const linkFor = makeLinker(env);
   const withLink = (result) => {
     const link = result.externalId === undefined ? undefined : linkFor(result.externalId);
     return link ? { ...result, link } : result;
