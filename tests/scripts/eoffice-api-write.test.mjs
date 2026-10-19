@@ -203,6 +203,7 @@ function batchFile(summaries, { settings, rulesOverride } = {}) {
 
 const env = (s) => ({
   EOFFICE_BASE_URL: s.url, EOFFICE_ACCESS_TOKEN: TOKEN, EOFFICE_SETTLE_MS: '0', EOFFICE_SESSION_COOKIE: '',
+  EOFFICE_TODAY: '2026-10-19', EOFFICE_ACCEPT_RUN_DATES: '1',
 });
 const lastLine = (text) => JSON.parse(text.trim().split('\n').at(-1));
 const noToken = (r) => { assert.equal((r.out + r.err).includes(TOKEN), false); };
@@ -1082,5 +1083,34 @@ test('--via session --no-report finishes a flat task with a status update and no
     assert.equal(result.status, 'REVIEW');
     assert.equal(s.reports.length, 0);
     assert.deepEqual(s.updates.map((u) => u.status), ['Đang đánh giá']);
+  } finally { s.server.close(); }
+});
+
+test('production apply refuses tasks that would get the run date unless accepted', async () => {
+  const s = await startServer();
+  try {
+    const strict = { ...env(s), EOFFICE_ACCEPT_RUN_DATES: '' };
+    const refused = await run(['create', '--apply', '--allow-production', '--confirm-host', s.host, batchFile(['Past task'])], strict);
+    assert.equal(refused.code, 2);
+    assert.match(refused.err, /actual dates = run date/);
+    assert.equal(s.posts.length, 0);
+    const flagged = await run(['create', '--apply', '--allow-production', '--confirm-host', s.host, '--accept-run-dates', batchFile(['Past task'])], strict);
+    assert.equal(flagged.code, 0, flagged.err);
+    assert.equal(lastLine(flagged.out)[0].datesFromRun, true);
+  } finally { s.server.close(); }
+});
+
+test('a session-created flat task with a report keeps plan dates and is not flagged', async () => {
+  const s = await startServer();
+  try {
+    const strict = { ...env(s), EOFFICE_ACCEPT_RUN_DATES: '', ...sess };
+    const r = await run(['create', '--apply', '--allow-production', '--confirm-host', s.host, '--via', 'session',
+      batchFile(['Past task'], { rulesOverride: sessionRules })], strict);
+    assert.equal(r.code, 0, r.err);
+    assert.equal(lastLine(r.out)[0].datesFromRun, undefined);
+    const dry = await run(['create', '--dry-run', '--via', 'session', batchFile(['Past task'], { rulesOverride: sessionRules })], strict);
+    assert.equal(JSON.parse(dry.out).plan[0].datesFromRun, false);
+    const noReport = await run(['create', '--dry-run', '--via', 'session', '--no-report', batchFile(['Past task'], { rulesOverride: sessionRules })], strict);
+    assert.equal(JSON.parse(noReport.out).plan[0].datesFromRun, true);
   } finally { s.server.close(); }
 });

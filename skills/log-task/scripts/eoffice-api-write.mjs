@@ -303,6 +303,8 @@ async function main(argv, env) {
   if (!['api', 'session'].includes(via)) throw new UsageError('--via must be api or session');
   const batch = readBatch(args.at(-1));
   const linkFor = makeLinker(env);
+  const today = env.EOFFICE_TODAY ?? new Date().toLocaleDateString('en-CA');
+  const acceptRunDates = args.includes('--accept-run-dates') || env.EOFFICE_ACCEPT_RUN_DATES === '1';
   const buildItem = async (task, parentId, seen) => {
     const { title, payload } = buildInsertPayload(task, {
       ...batch, settings: { ...batch.settings, parent: parentId },
@@ -323,6 +325,7 @@ async function main(argv, env) {
     if (sessionFields && !sessionFields.projectId) throw new RulesError('--via session needs batch.project.id (the raw project ID)');
     if (!reportDate) throw new RulesError('each task needs end, endPlan or startPlan (used as the report date)');
     return {
+      pastDates: [task.start ?? task.startPlan, task.end ?? task.endPlan].filter(Boolean).some((day) => day < today),
       summary: task.summary, title, duplicate: duplicate && { ...duplicate, link: linkFor(duplicate.id) }, payload, session: sessionFields, repeated, reportDate, note: task.note ?? task.summary.trim(),
     };
   };
@@ -346,9 +349,21 @@ async function main(argv, env) {
     plan.push(item);
   }
 
+  // Only a session-created flat task with a report gets its actual dates from the plan; every other path stamps the run date.
+  const runDates = (item, isChild) => item.pastDates
+    && !(via === 'session' && !isChild && !item.children?.length && !noReport);
+  for (const item of plan) {
+    item.datesFromRun = runDates(item, false);
+    for (const child of item.children) child.datesFromRun = runDates(child, true);
+  }
+
   if (!apply) {
     console.log(JSON.stringify({ host: client.host, plan }, null, 2));
     return 0;
+  }
+  const stamped = plan.flatMap((item) => [item, ...item.children]).filter((item) => item.datesFromRun && !item.duplicate);
+  if (stamped.length && !isUatHost(client.host, env.EOFFICE_UAT_HOSTS) && !acceptRunDates) {
+    throw new UsageError(`${stamped.length} task(s) would get actual dates = run date (${stamped[0].summary}...). Use --via session (flat tasks, with a report) for plan dates, or pass --accept-run-dates`);
   }
 
   const settleMs = Number(env.EOFFICE_SETTLE_MS ?? 3000);
@@ -465,7 +480,7 @@ async function main(argv, env) {
         own = failure({ ...base, externalId: id }, err);
       }
     }
-    const linked = withLink(own);
+    const linked = withLink(item.datesFromRun ? { ...own, datesFromRun: true } : own);
     return children.length ? { ...linked, children } : linked;
   }
 
