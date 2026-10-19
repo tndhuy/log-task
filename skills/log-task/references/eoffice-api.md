@@ -189,9 +189,12 @@ and the response carries the new task's `redirect: work-normal-normal/view?ID=<i
 - Owners stay as the rules say; only the creator changes. `rules.flags` is ignored: the form's own defaults apply.
 - Finishing: a flat task gets the progress report at 100% (it moves to REVIEW by itself); a parent or child
   gets a status update. The people check, duplicate guard and batch stop work as with the API.
-- Who may do what (production, observed): the task's **creator** is the signed-in user; the **progress report**
-  needs the user to be an assignee; editing **actual dates** (`set-dates`) needs the user to be an owner. A user who
-  is only the creator can do neither. For tasks logged on someone else's behalf, pass `--no-report` to finish flat
+- Who may do what (production, observed): the task's **creator** is the signed-in user. While the task is **DOING** the
+  creator who is also its assignee may open the edit form and the dates dialog; changing the **status** and **deleting**
+  are refused. The **progress report** needs the user to be an assignee. Once the task is **REVIEW** the edit form is
+  closed and editing actual dates (`set-dates`) needs the user to be in the task's owner list (the "Assignor" field).
+- While DOING the dates dialog sets the actual start but not the actual end, and the later status update to REVIEW
+  stamps both actual dates with the run date; only the report keeps the evidence end date. For tasks logged on someone else's behalf, pass `--no-report` to finish flat
   tasks with a status update instead; their actual dates then show the run date.
 - A report dated inside the plan window gives actual start = plan start and actual end = the report date, so a
   session-created assignee needs no date correction.

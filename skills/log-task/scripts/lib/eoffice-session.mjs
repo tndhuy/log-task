@@ -92,7 +92,7 @@ export function createSessionClient({ baseUrl, cookie, fetchImpl = globalThis.fe
     const refused = body?.error || (body?.message && !body.notice && !body.close);
     if (res.status !== 200 || refused) {
       const message = (body?.message ?? text).slice(0, 120);
-      const hint = /permission|quyền/i.test(message) ? " (the date route needs the owner of the task; being its creator is not enough)" : '';
+      const hint = /permission|quyền/i.test(message) ? " (once a task is in REVIEW only an owner of the task may edit its dates)" : '';
       throw new EofficeApiError(`Date update refused: ${message}${hint}`, { code: 'dates' });
     }
   }
