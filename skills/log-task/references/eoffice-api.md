@@ -174,6 +174,23 @@ Both are read through `GET /api/work/normal/item`; a missing task answers `Post 
   `{origin}/work-normal-normal/view?ID={id}`. Without it results carry no `link` and one hint line
   is printed. The ledger stores `externalId` only.
 
+## Correcting actual dates (`set-dates`)
+
+The REVIEW status update stamps the actual dates with the run date (F2). `set-dates` fixes them
+afterwards through the UI route `POST /work-task-task/realtime?_json=1`, which needs a browser
+session like the progress report (`--session-from brave|chrome` or `EOFFICE_SESSION_COOKIE`).
+
+- `set-dates --dry-run --project-id <rawId> --ids 1,2 --actual-from-plan` (read-only) shows each
+  task's dates before and after.
+- `--actual-from-plan` sets the actual start/end to the plan dates; or pass `--start`, `--end`,
+  `--start-plan`, `--end-plan` as `YYYY-MM-DD`. Use one form or the other, not both.
+- `set-dates --apply --confirm-host <host> [--allow-production] --session-from brave --project-id ...`
+  has the same host gate as `create`. Every date is sent together, because an update that omits a date can clear it.
+- The CLI reads the task back and reports `updated`, `unchanged` or `mismatch`; a refusal or a
+  mismatch stops the run. Tasks in another project, or missing, make it exit 2 before any call.
+- The `end` field name and the response shape of this route are not yet verified on a real host;
+  the read-back is the check.
+
 ## Production behaviour (observed 2026-10-16)
 
 Evidence and open points: `docs/eoffice-api-production-findings.md`. Sample sizes are small.

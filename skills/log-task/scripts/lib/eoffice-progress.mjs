@@ -3,10 +3,11 @@ import { toApiDate } from './eoffice-rules.mjs';
 
 const RELOAD = '/integration-document?_json=1&reloadCsrfToken=1&inlineLogin=1';
 const PROGRESS = '/work-task-task/progress?_json=1';
+const REALTIME = '/work-task-task/realtime?_json=1';
 
 /**
- * Creates the progress-report record, which the integration API cannot do.
- * Uses the UI endpoint with a browser session cookie plus a CSRF token that the
+ * Performs the actions the integration API cannot: the progress-report record and the
+ * date edit that corrects actual dates. Both use the UI endpoint with a browser session cookie plus a CSRF token that the
  * server returns in the `csrf-token-cache` response header.
  */
 export function createProgressClient({ baseUrl, cookie, fetchImpl = globalThis.fetch }) {
@@ -62,5 +63,29 @@ export function createProgressClient({ baseUrl, cookie, fetchImpl = globalThis.f
     }
   }
 
-  return { reportProgress };
+  // Every date is sent together: an update that omits a date can clear it (seen with the API's update).
+  async function updateDates({ taskId, startPlan, endPlan, start, end }) {
+    const csrf = await freshCsrf();
+    const form = new FormData();
+    form.append('ID', String(taskId));
+    for (const [key, value] of [['start_plan', startPlan], ['end_plan', endPlan], ['start', start], ['end', end]]) {
+      if (value) form.append(key, toApiDate(value));
+    }
+    form.append('inlineLogin', '1');
+    const res = await send(REALTIME, {
+      method: 'POST',
+      body: form,
+      headers: { ...base, origin, referer: `${origin}/work-normal-normal/view?ID=${taskId}`, 'csrf-token-cache': csrf },
+    });
+    const text = scrub(await res.text()).split(csrf).join('<csrf>');
+    let body;
+    try { body = JSON.parse(text); } catch { body = null; }
+    // A refusal answers with only a message; success carries a notice or close flag. The caller still verifies by read-back.
+    const refused = body?.error || (body?.message && !body.notice && !body.close);
+    if (res.status !== 200 || refused) {
+      throw new EofficeApiError(`Date update refused: ${(body?.message ?? text).slice(0, 120)}`, { code: 'dates' });
+    }
+  }
+
+  return { reportProgress, updateDates };
 }

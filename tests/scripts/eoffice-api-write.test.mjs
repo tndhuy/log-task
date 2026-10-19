@@ -20,7 +20,8 @@ async function startServer() {
   const deletes = [];
   const unresolved = new Set();
   const keepOnDelete = new Set();
-  const flags = { failNextItem: false };
+  const flags = { failNextItem: false, ignoreRealtime: false };
+  const realtimes = [];
   const itemCalls = [];
   const peopleIds = (value) => String(value ?? '').split(',').map((name) => name.trim())
     .filter((name) => name && !unresolved.has(name)).map((name) => 7000 + name.length).join(',');
@@ -48,6 +49,25 @@ async function startServer() {
         return;
       }
       row.status = 'REVIEW'; row.percent = 100;
+      res.end(JSON.stringify({ close: true, notice: 'Cập nhật thành công' }));
+      return;
+    }
+    if (url.pathname === '/work-task-task/realtime') {
+      const ok = req.headers.cookie === 'sess=1' && req.headers['csrf-token-cache'] === 'csrf-fresh-0123456789abcdef01234567';
+      if (!ok) {
+        res.end(JSON.stringify({ message: 'Bạn không có quyền thực hiện chức năng này' }));
+        return;
+      }
+      const fields = {};
+      for (const match of body.matchAll(/name="([^"]+)"\r\n\r\n([^\r]*)/g)) fields[match[1]] = match[2];
+      realtimes.push(fields);
+      const row = tasks.find((t) => String(t.ID) === fields.ID);
+      const iso = (value) => (value ? `${value.slice(6, 10)}-${value.slice(3, 5)}-${value.slice(0, 2)} 00:00:00` : undefined);
+      if (row && !flags.ignoreRealtime) {
+        for (const [field, key] of [['start_plan', 'start_plan'], ['end_plan', 'end_plan'], ['start', 'start'], ['end', 'end']]) {
+          if (fields[field]) row[key] = iso(fields[field]);
+        }
+      }
       res.end(JSON.stringify({ close: true, notice: 'Cập nhật thành công' }));
       return;
     }
@@ -119,7 +139,7 @@ async function startServer() {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
-  return { server, tasks, posts, updates, reports, deletes, unresolved, keepOnDelete, flags, itemCalls, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
+  return { server, tasks, posts, updates, reports, deletes, unresolved, keepOnDelete, flags, itemCalls, realtimes, url: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` };
 }
 
 function run(args, env) {
@@ -776,5 +796,127 @@ test('an existing task keeps its link in the dry-run plan and in the skipped res
     const [skipped] = lastLine(rerun.out);
     assert.equal(skipped.skipped, 'already exists');
     assert.equal(skipped.link, `${s.url}/work-normal-normal/view?ID=${skipped.externalId}`);
+  } finally { s.server.close(); }
+});
+
+const dates = (s, args, extra = {}) => run(['set-dates', ...args], { ...env(s), ...extra });
+const sess = { EOFFICE_SESSION_COOKIE: 'sess=1' };
+const applyDates = (s, more, extra = sess) => dates(s, ['--apply', '--confirm-host', s.host, '--allow-production', '--project-id', '3869', ...more], extra);
+
+test('set-dates --dry-run shows before and after and sends nothing', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    const r = await dates(s, ['--dry-run', '--project-id', '3869', '--ids', '5000', '--actual-from-plan']);
+    assert.equal(r.code, 0, r.err);
+    const [row] = JSON.parse(r.out);
+    assert.equal(row.result, 'would update');
+    assert.deepEqual(row.before, { startPlan: '2026-10-06', endPlan: '2026-10-09', start: '2026-10-19', end: '2026-10-19' });
+    assert.deepEqual(row.after, { startPlan: '2026-10-06', endPlan: '2026-10-09', start: '2026-10-06', end: '2026-10-09' });
+    assert.equal(s.realtimes.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('set-dates --apply sends every date together, then confirms by read-back', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    const r = await applyDates(s, ['--ids', '5000', '--actual-from-plan']);
+    assert.equal(r.code, 0, r.err);
+    assert.equal(JSON.parse(r.out)[0].result, 'updated');
+    assert.deepEqual(s.realtimes, [{
+      ID: '5000', start_plan: '06/10/2026', end_plan: '09/10/2026', start: '06/10/2026', end: '09/10/2026', inlineLogin: '1',
+    }]);
+    assert.equal(s.tasks[0].start.slice(0, 10), '2026-10-06');
+    assert.equal((r.out + r.err).includes('sess=1'), false);
+  } finally { s.server.close(); }
+});
+
+test('explicit --start and --end change only those, keeping the plan dates', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    const r = await applyDates(s, ['--ids', '5000', '--start', '2026-10-07', '--end', '2026-10-08']);
+    assert.equal(r.code, 0, r.err);
+    assert.equal(s.realtimes[0].start_plan, '06/10/2026');
+    assert.equal(s.realtimes[0].start, '07/10/2026');
+    assert.equal(s.realtimes[0].end, '08/10/2026');
+  } finally { s.server.close(); }
+});
+
+test('set-dates makes no call for a task whose dates already match', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { start: '2026-10-06 00:00:00', end: '2026-10-09 00:00:00' });
+    const r = await applyDates(s, ['--ids', '5000', '--actual-from-plan']);
+    assert.equal(r.code, 0);
+    assert.equal(JSON.parse(r.out)[0].result, 'unchanged');
+    assert.equal(s.realtimes.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('a server that ignores the update is reported as mismatch with exit 1', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    s.flags.ignoreRealtime = true;
+    const r = await applyDates(s, ['--ids', '5000', '--actual-from-plan']);
+    assert.equal(r.code, 1);
+    const [row] = JSON.parse(r.out);
+    assert.equal(row.result, 'mismatch');
+    assert.equal(row.actual.start, '2026-10-19');
+  } finally { s.server.close(); }
+});
+
+test('set-dates --apply needs a session and the usual host gate', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    const noSession = await applyDates(s, ['--ids', '5000', '--actual-from-plan'], { EOFFICE_SESSION_COOKIE: '' });
+    assert.equal(noSession.code, 2);
+    assert.match(noSession.err, /session/);
+    const noHost = await dates(s, ['--apply', '--allow-production', '--project-id', '3869', '--ids', '5000', '--actual-from-plan'], sess);
+    assert.equal(noHost.code, 2);
+    const noProd = await dates(s, ['--apply', '--confirm-host', s.host, '--project-id', '3869', '--ids', '5000', '--actual-from-plan'], sess);
+    assert.equal(noProd.code, 2);
+    assert.equal(s.realtimes.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('a rejected session is reported per task and stops the run', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    seed(s, { ID: 5001, start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    const r = await applyDates(s, ['--ids', '5000,5001', '--actual-from-plan'], { EOFFICE_SESSION_COOKIE: 'sess=wrong' });
+    assert.equal(r.code, 1);
+    const rows = JSON.parse(r.out);
+    assert.equal(rows[0].result, 'error');
+    assert.equal(rows[1].result, 'not attempted');
+    assert.equal(s.tasks[0].start.slice(0, 10), '2026-10-19');
+  } finally { s.server.close(); }
+});
+
+test('set-dates refuses another project or a missing task before any call', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { project_id: 9999 });
+    const other = await applyDates(s, ['--ids', '5000', '--actual-from-plan']);
+    assert.equal(other.code, 2);
+    const missing = await applyDates(s, ['--ids', '424242', '--actual-from-plan']);
+    assert.equal(missing.code, 2);
+    assert.equal(s.realtimes.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('set-dates rejects bad options with exit 2', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    const base = ['--dry-run', '--project-id', '3869', '--ids', '5000'];
+    for (const extra of [[], ['--actual-from-plan', '--start', '2026-10-01'], ['--start', '01/10/2026'], ['--end', '2026-13-40']]) {
+      const r = await dates(s, [...base, ...extra]);
+      assert.equal(r.code, 2, extra.join(' '));
+    }
   } finally { s.server.close(); }
 });

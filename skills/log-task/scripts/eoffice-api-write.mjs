@@ -10,7 +10,7 @@ import {
 } from './lib/eoffice-api.mjs';
 import { createProgressClient } from './lib/eoffice-progress.mjs';
 import {
-  RulesError, STATUS_DISPLAY, buildInsertPayload, validateRules,
+  RulesError, STATUS_DISPLAY, buildInsertPayload, toApiDate, validateRules,
 } from './lib/eoffice-rules.mjs';
 
 const USAGE = `Usage:
@@ -18,6 +18,8 @@ const USAGE = `Usage:
   eoffice-api-write.mjs get --ids <id>[,<id>...] [--raw]
   eoffice-api-write.mjs delete --dry-run --project-id <rawId> --ids <id>[,<id>...]
   eoffice-api-write.mjs delete --apply --confirm-host <host> [--allow-production] [--allow-foreign] --project-id <rawId> --ids <id>[,<id>...]
+  eoffice-api-write.mjs set-dates --dry-run --project-id <rawId> --ids <id>[,<id>...] (--actual-from-plan | [--start d] [--end d] [--start-plan d] [--end-plan d])
+  eoffice-api-write.mjs set-dates --apply --confirm-host <host> [--allow-production] [--session-from chrome|brave] --project-id <rawId> --ids ... (same date options)
   eoffice-api-write.mjs create --dry-run <batch.json>
   eoffice-api-write.mjs create --apply --confirm-host <host> [--allow-production] [--session-from chrome|brave] <batch.json>`;
 
@@ -128,6 +130,91 @@ async function runGet(client, args, env) {
 
 const API_ACCOUNT_ID = 1;
 
+const isoDate = (value) => {
+  const day = value ? String(value).slice(0, 10) : '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) && !day.startsWith('0000') ? day : null;
+};
+
+function dateTargets(args, current) {
+  const given = {
+    start: flag(args, '--start'), end: flag(args, '--end'),
+    startPlan: flag(args, '--start-plan'), endPlan: flag(args, '--end-plan'),
+  };
+  const fromPlan = args.includes('--actual-from-plan');
+  const anyGiven = Object.values(given).some((value) => value !== undefined);
+  if (fromPlan === anyGiven) {
+    throw new UsageError('set-dates needs --actual-from-plan or at least one of --start --end --start-plan --end-plan, not both');
+  }
+  for (const value of Object.values(given)) if (value !== undefined) toApiDate(value);
+  const target = fromPlan
+    ? { ...current, start: current.startPlan, end: current.endPlan }
+    : { ...current, ...Object.fromEntries(Object.entries(given).filter(([, value]) => value !== undefined)) };
+  return target;
+}
+
+async function runSetDates(client, args, env) {
+  const apply = args.includes('--apply');
+  if (apply === args.includes('--dry-run')) throw new UsageError('set-dates needs exactly one of --dry-run or --apply');
+  const projectId = flag(args, '--project-id') ?? env.EOFFICE_PROJECT_ID;
+  if (!projectId) throw new UsageError('set-dates needs --project-id <raw project id> or EOFFICE_PROJECT_ID');
+  if (apply) assertApplyAllowed(args, client, env);
+  const sessionFrom = flag(args, '--session-from');
+  if (sessionFrom !== undefined && !['chrome', 'brave'].includes(sessionFrom)) throw new UsageError('--session-from must be chrome or brave');
+  if (sessionFrom !== undefined && !apply) throw new UsageError('--session-from only applies to --apply');
+  const linkFor = makeLinker(env);
+
+  const rows = [];
+  for (const id of parseIds(args)) {
+    const data = await getItem(client, { id, raw: true });
+    const row = { id: Number(id), title: data?.title, link: linkFor(id) };
+    if (!data) rows.push({ ...row, result: 'absent' });
+    else if (String(data.project_id) !== String(projectId)) {
+      rows.push({ ...row, result: 'refused', reason: `project_id ${data.project_id} is not ${projectId}` });
+    } else {
+      const before = {
+        startPlan: isoDate(data.start_plan), endPlan: isoDate(data.end_plan), start: isoDate(data.start), end: isoDate(data.end),
+      };
+      const after = dateTargets(args, before);
+      const same = Object.keys(before).every((key) => before[key] === after[key]);
+      rows.push({ ...row, before, after, result: same ? 'unchanged' : (apply ? 'pending' : 'would update') });
+    }
+  }
+  const blocked = rows.some((row) => row.result === 'absent' || row.result === 'refused');
+  if (!apply || blocked || !rows.some((row) => row.result === 'pending')) {
+    console.log(JSON.stringify(rows, null, 2));
+    return blocked ? (apply ? 2 : 1) : 0;
+  }
+
+  const cookie = env.EOFFICE_SESSION_COOKIE || (sessionFrom ? await cookieFromBrowser(sessionFrom, client.host) : '');
+  if (!cookie) throw new UsageError('set-dates --apply needs a browser session: pass --session-from brave|chrome or set EOFFICE_SESSION_COOKIE');
+  const session = createProgressClient({ baseUrl: env.EOFFICE_BASE_URL, cookie });
+  const settleMs = Number(env.EOFFICE_SETTLE_MS ?? 3000);
+  let failed = false;
+  for (const row of rows.filter((entry) => entry.result === 'pending')) {
+    if (failed) {
+      row.result = 'not attempted';
+      continue;
+    }
+    try {
+      await session.updateDates({ taskId: row.id, ...row.after });
+      await sleep(settleMs);
+      const data = await getItem(client, { id: row.id, raw: true });
+      const actual = {
+        startPlan: isoDate(data?.start_plan), endPlan: isoDate(data?.end_plan), start: isoDate(data?.start), end: isoDate(data?.end),
+      };
+      const matches = Object.keys(row.after).every((key) => !row.after[key] || row.after[key] === actual[key]);
+      row.result = matches ? 'updated' : 'mismatch';
+      if (!matches) row.actual = actual;
+    } catch (err) {
+      row.result = 'error';
+      row.error = firstLine(err);
+    }
+    failed = row.result !== 'updated';
+  }
+  console.log(JSON.stringify(rows, null, 2));
+  return rows.some((row) => ['mismatch', 'error', 'not attempted'].includes(row.result)) ? 1 : 0;
+}
+
 function classify(data, { projectId, allowForeign }) {
   if (!data) return { result: 'absent' };
   if (String(data.project_id) !== String(projectId)) {
@@ -183,7 +270,7 @@ async function runDelete(client, args, env) {
 
 async function main(argv, env) {
   const [command, ...args] = argv;
-  if (!['search-parent', 'create', 'get', 'delete'].includes(command)) throw new UsageError(USAGE);
+  if (!['search-parent', 'create', 'get', 'delete', 'set-dates'].includes(command)) throw new UsageError(USAGE);
   const client = createClient({ baseUrl: env.EOFFICE_BASE_URL, token: env.EOFFICE_ACCESS_TOKEN });
 
   if (command === 'search-parent') {
@@ -197,6 +284,7 @@ async function main(argv, env) {
 
   if (command === 'get') return runGet(client, args, env);
   if (command === 'delete') return runDelete(client, args, env);
+  if (command === 'set-dates') return runSetDates(client, args, env);
 
   const apply = args.includes('--apply');
   if (apply === args.includes('--dry-run')) {
