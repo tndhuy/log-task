@@ -412,6 +412,7 @@ test('a rejected report leaves the task reported as created but not finished', a
     assert.equal(result.created, true);
     assert.equal(result.submitted, false);
     assert.match(result.error, /created but not finished: Progress report refused/);
+    assert.equal(typeof result.externalId, 'number');
   } finally { s.server.close(); }
 });
 

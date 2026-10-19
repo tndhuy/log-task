@@ -460,7 +460,7 @@ async function main(argv, env) {
         own = { ...base, submitted: true, externalId: id, ...(await complete(item, { id }, !isChild && !item.children?.length)) };
       } catch (err) {
         err.created = true;
-        own = failure(base, err);
+        own = failure({ ...base, externalId: id }, err);
       }
     }
     const linked = withLink(own);
