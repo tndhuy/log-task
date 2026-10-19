@@ -1067,3 +1067,20 @@ test('a rejected session on --via session creates nothing and says so', async ()
     assert.equal(s.tasks.length, 0);
   } finally { s.server.close(); }
 });
+
+test('--via session --no-report finishes a flat task with a status update and no report', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(
+      ['create', '--apply', '--allow-production', '--confirm-host', s.host, '--via', 'session', '--no-report',
+        batchFile(['Task one'], { rulesOverride: sessionRules })],
+      { ...env(s), ...sess },
+    );
+    assert.equal(r.code, 0, r.err);
+    const [result] = lastLine(r.out);
+    assert.equal(result.report, 'status-update-only');
+    assert.equal(result.status, 'REVIEW');
+    assert.equal(s.reports.length, 0);
+    assert.deepEqual(s.updates.map((u) => u.status), ['Đang đánh giá']);
+  } finally { s.server.close(); }
+});

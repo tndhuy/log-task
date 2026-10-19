@@ -21,7 +21,7 @@ const USAGE = `Usage:
   eoffice-api-write.mjs set-dates --dry-run --project-id <rawId> --ids <id>[,<id>...] (--actual-from-plan | [--start d] [--end d] [--start-plan d] [--end-plan d])
   eoffice-api-write.mjs set-dates --apply --confirm-host <host> [--allow-production] [--session-from chrome|brave] --project-id <rawId> --ids ... (same date options)
   eoffice-api-write.mjs create --dry-run <batch.json>
-  eoffice-api-write.mjs create --apply --confirm-host <host> [--allow-production] [--via api|session] [--session-from chrome|brave] <batch.json>`;
+  eoffice-api-write.mjs create --apply --confirm-host <host> [--allow-production] [--via api|session] [--no-report] [--session-from chrome|brave] <batch.json>`;
 
 function readBatch(file) {
   if (!file || file.startsWith('--')) throw new UsageError(USAGE);
@@ -298,6 +298,8 @@ async function main(argv, env) {
   }
 
   const via = flag(args, '--via') ?? 'api';
+  // A progress report needs the signed-in user to be an assignee; --no-report finishes with a status update instead.
+  const noReport = args.includes('--no-report');
   if (!['api', 'session'].includes(via)) throw new UsageError('--via must be api or session');
   const batch = readBatch(args.at(-1));
   const linkFor = makeLinker(env);
@@ -389,7 +391,7 @@ async function main(argv, env) {
   // The server hides the report button on subtasks and on tasks that have subtasks.
   async function complete(item, inserted, reportable) {
     await sleep(settleMs);
-    if (progress && reportable) {
+    if (progress && reportable && !noReport) {
       // The server refuses a report while the task is still PENDING; the UI form already starts it in DOING.
       if (via !== 'session') {
         await updateTask(client, { id: inserted.id, status: STATUS_DISPLAY.DOING });
@@ -403,7 +405,7 @@ async function main(argv, env) {
     }
     const final = await getItem(client, { id: inserted.id, raw: true });
     return {
-      status: final?.status, percent: final?.percent, report: progress && reportable ? 'progress-report' : 'status-update-only',
+      status: final?.status, percent: final?.percent, report: progress && reportable && !noReport ? 'progress-report' : 'status-update-only',
     };
   }
 
