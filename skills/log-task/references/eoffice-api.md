@@ -9,7 +9,8 @@ access; sign in to eOffice in that browser first). It enables the progress-repor
 
 ## Verified write flow (UAT)
 
-Per task: `insert` (no `status`; enums as display values; people as **usernames**;
+Per task: `insert` (no `status`; enums as display values; people in the format the environment
+resolves (UAT: usernames, production: display names, see "Production behaviour");
 `project_id` = project code) → wait 3 s → ONE of:
 - with a session cookie: `update status="Đang thực hiện"` (the server refuses a report while the task is PENDING), wait, then `POST /work-task-task/progress` (CSRF taken from the
   `csrf-token-cache` response header of a `reloadCsrfToken=1` request). This writes the
@@ -31,7 +32,8 @@ so use `--env-file "$HOME/x"`.
 
 ## Config
 
-Platform value `eoffice-api`. Group entries carry `rules`; a child's `rules`
+Platform value `eoffice-api`. People values (`owner`, `assignees`, `followers`) use the format
+of the environment the env file points at: display names on production, usernames on UAT. Group entries carry `rules`; a child's `rules`
 replace the group's per top-level key (a child `done` replaces the whole group `done`).
 
 ```json
@@ -41,8 +43,8 @@ replace the group's per top-level key (a child `done` replaces the whole group `
   "parent":    { "mode": "ask", "remember": true, "candidates": [
                   { "id": 2089469, "label": "OneNova -P5- Development" },
                   { "id": 2087612, "label": "05. One Nova - Phase 5 CDS thư ký - Điểm danh cuộc họp" } ] },
-  "owner":     { "mode": "ask", "default": "<your username>", "remember": true },
-  "assignees": { "mode": "ask", "default": ["<your username>", "<colleague username>"], "remember": true },
+  "owner":     { "mode": "ask", "default": "<Your Display Name>", "remember": true },
+  "assignees": { "mode": "ask", "default": ["<Your Display Name>", "<Colleague Display Name>"], "remember": true },
   "followers": { "mode": "fixed", "value": [] },
   "dates":     { "actualFromPlan": true },
   "done":      { "status": "REVIEW" }
@@ -117,7 +119,7 @@ target host. Only `Done` tasks may be created.
 6. Explicit approval that names the host. Then:
    `node <skill-dir>/scripts/eoffice-api-write.mjs create --apply --confirm-host <host> batch.json`.
    Add `--allow-production` only for a non-UAT host, and only when the user
-   states in this run that the UAT checklist (`docs/eoffice-api-uat-checklist.md`)
+   states in this run that the UAT checklist (`docs/uat-checklist.md`)
    is complete; never add it in response to a refusal message.
 7. Parse the last output line. For each result with `submitted: true` or
    `skipped: "already exists"`, ledger the task with `externalId`. The ledger
@@ -130,6 +132,12 @@ target host. Only `Done` tasks may be created.
      it would create a second copy). A whole-batch rerun reports already-ledgered
      tasks as "already exists"; append to the ledger only fingerprints that are
      not already present.
+   - A result with `error: "people not resolved: ..."` is also `created: true`,
+     `submitted: false`: the server dropped the owner or assignees, the task stays at
+     its default status, and the batch stopped. Never ledger it. After the user approves,
+     remove it with `delete --dry-run` then `--apply` (see "Get and delete") and recreate
+     the batch with people in the environment's format.
+   - Show every result with an ID together with its `link` (when the template is set).
    - Results with `skipped: "duplicate title in batch"` are not ledgered twice
      (one task only).
    - Report each failure by task name; never retry with altered data.
@@ -145,9 +153,53 @@ target host. Only `Done` tasks may be created.
    `error: "created but not finished: ..."` exists but the report or status step failed:
    do not rerun `--apply` (the duplicate guard would skip it); finish it in the UI.
 
+## Get and delete
+
+Both are read through `GET /api/work/normal/item`; a missing task answers `Post not found`.
+
+- `get --ids 1,2 [--raw]` (read-only, no host gate): prints `{ id, found, title, status, percent,
+  startPlan, endPlan, start, end, owner, assignees, creator, parentId, link }` per ID. Exit 1 if any
+  ID was not found.
+- `delete --dry-run --project-id <raw project id> --ids 1,2` classifies each ID:
+  `absent` (nothing to do), `refused` (another project, or not created by the API account
+  unless `--allow-foreign`) or `deletable`. `--project-id` is the raw `params.projectId`, not
+  `projectRef`; `EOFFICE_PROJECT_ID` is the fallback.
+- `delete --apply --confirm-host <host> [--allow-production] --project-id ... --ids ...` uses the
+  same host gate as `create`. It reclassifies first and exits 2 before any call when an ID is
+  refused; otherwise one `delete` call per ID (`delIds=<id>`, never a list), then a read-back.
+  An ID that is still present after `error: false` stops the run (`still present`).
+- Ledger after a delete: keep the entry, set `deletedAt`, add `excluded: "<reason>"` when the work
+  is out of scope, and give a recreated task the new `externalId` plus `replaces: <old id>`.
+- Links are built from `EOFFICE_TASK_URL_TEMPLATE` (`{origin}` and `{id}`); production value
+  `{origin}/work-normal-normal/view?ID={id}`. Without it results carry no `link` and one hint line
+  is printed. The ledger stores `externalId` only.
+
+## Production behaviour (observed 2026-10-16)
+
+Evidence and open points: `docs/eoffice-api-production-findings.md`. Sample sizes are small.
+
+- **People.** Production resolves display names; usernames and numeric IDs are dropped silently
+  (`insert` still answers `error: false`). The CLI therefore reads the task back after `insert`
+  and stops the batch when owner or assignees are missing or only partly stored.
+  Display names are not guaranteed unique.
+- **Dates.** The REVIEW status update sets the actual dates to the run date, so
+  `dates.actualFromPlan` has no lasting effect on production.
+- **Creator.** API-created tasks belong to "Admin Hệ Thống" (`created_by_id` 1), with no
+  department. Reports that filter by creator may not count them.
+- **`gets` filters.** `ID`, `id` and `ids` filters are ignored; never find a task by ID with `gets`.
+
 ## Errors
 
-- `accesstoken not of object`: the token lacks permission for `work-normal-normal`; stop.
+| API response | Meaning | What to do |
+|---|---|---|
+| `not object` | token unknown, truncated, or its API key has no object for `work/normal` | compare the token length with the admin page; check "Last access time"; retry once if the admin just edited the key |
+| `action not scopes` | the key can read but lacks this action | ask the eOffice admin to grant insert/update on `work/normal` |
+| `Post not found` (`item`) | no task with that ID | treated as absent by `get` and `delete` |
+| `no_action` | unknown action name | none; the CLI does not send unknown actions |
+
+The CLI appends these hints to the message. `doctor --online` makes one read call (`limit=1`) and
+shows the same hint before a run.
+
 - Missing `EOFFICE_BASE_URL` or `EOFFICE_ACCESS_TOKEN`: exit 2 naming the variable.
 - Apply refused (exit 2): wrong or missing `--confirm-host`, or a host that is not in the UAT allowlist without `--allow-production`. The allowlist is the exact host list in `EOFFICE_UAT_HOSTS` (comma-separated); when unset it is `eoffice-uat.novagroup.vn`. Lookalike hosts such as `prod-uat.corp.com` are not UAT.
 - Partial failure: exit 1; ledger only the confirmed tasks.

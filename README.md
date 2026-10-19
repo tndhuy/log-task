@@ -80,6 +80,15 @@ the skill directory, so updates never overwrite it.
 4. For `eoffice-api`, run the proposed `--dry-run` first, then `--apply`.
    Writing to a host outside the UAT list requires you to say so in that run.
 
+Useful checks for `eoffice-api` (details in `skills/log-task/references/eoffice-api.md`):
+
+- `eoffice-api-write.mjs get --ids <id>[,<id>...]` shows a task and its link, read-only.
+- `eoffice-api-write.mjs delete --dry-run --project-id <rawId> --ids <id>` then `--apply`
+  removes tasks the skill created by mistake.
+- People in `rules` use the format of the environment: display names on production,
+  usernames on UAT. A batch stops when the server drops them.
+- `doctor.mjs --online` makes one read call to confirm the token works.
+
 ## Platforms
 
 | Platform | Writes to | Reference |

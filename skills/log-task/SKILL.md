@@ -183,6 +183,12 @@ computed in Step 4 and an `evidenceCommits` array of every backing commit
 hash (needed for Step 4's commit-anchored dedup check on future runs), then
 write the file back.
 
+End the run with a report that lists each task with its `link` (when the platform
+returns one). A ledger entry keeps `externalId` only; links are derived at display
+time. When a created task is later removed, keep its entry and set `deletedAt` (plus
+`excluded` with the reason when the work is out of scope); a recreated task
+gets the new `externalId` and `replaces: <old id>` on the same entry.
+
 ## Group runs
 
 Applies when Step 1 returns `mode: "group-run"`. `child-run` follows the normal

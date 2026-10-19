@@ -47,14 +47,14 @@
           },
           "owner": {
             "mode": "ask",
-            "default": "<your username>",
+            "default": "<Your Display Name>",
             "remember": true
           },
           "assignees": {
             "mode": "ask",
             "default": [
-              "<your username>",
-              "<colleague username>"
+              "<Your Display Name>",
+              "<Colleague Display Name>"
             ],
             "remember": true
           },
