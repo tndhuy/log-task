@@ -212,6 +212,23 @@ and the response carries the new task's `redirect: work-normal-normal/view?ID=<i
 - The form's behaviour was observed once on production (task with creator 8990, department set); treat the
   field names as unversioned UI, like the report route.
 
+## Checking and sending reports (`report`)
+
+`report --dry-run --project-id <rawId> --items items.json` (read-only) checks that tasks already carry their
+evidence: `items.json` is `[{ "id": 2135345, "start": "2026-10-09", "end": "2026-10-14", "note": "..." }]`. It reads
+through the token when set, otherwise through the session, and classifies each item:
+
+- `done`: status REVIEW or later, 100 %, actual start and end equal the item's. Nothing to do; a task is never reported twice.
+- `ready`: status DOING and actual start equals the item's start. `--apply` reports it dated the item's `end`.
+- `waiting`: DOING but the actual start differs; correct it first (`set-dates` or the UI).
+- `wrong status`: anything else; the command never moves a task and never sends `update` (which clears the actual start).
+- `absent` / `refused` (token reads only: another project): `--apply` exits 2 before any call.
+
+`report --apply --confirm-host <host> [--allow-production] --session-from brave|chrome ...` reports the `ready`
+items in order, reads each back and expects REVIEW, 100 % and the item's dates (`reported`, otherwise `mismatch`, and
+the rest are `not attempted`). Exit 0 when every item is `reported` or `done`, 1 otherwise, 2 for usage and gate errors.
+A refusal about the start date carries the hint to correct the actual start first.
+
 ## Correcting actual dates (`set-dates`)
 
 The REVIEW status update stamps the actual dates with the run date (F2). `set-dates` fixes them

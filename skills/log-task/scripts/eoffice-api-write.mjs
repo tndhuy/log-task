@@ -18,6 +18,8 @@ const USAGE = `Usage:
   eoffice-api-write.mjs get --ids <id>[,<id>...] [--raw]
   eoffice-api-write.mjs delete --dry-run --project-id <rawId> --ids <id>[,<id>...]
   eoffice-api-write.mjs delete --apply --confirm-host <host> [--allow-production] [--allow-foreign] --project-id <rawId> --ids <id>[,<id>...]
+  eoffice-api-write.mjs report --dry-run --project-id <rawId> --items <items.json>
+  eoffice-api-write.mjs report --apply --confirm-host <host> [--allow-production] [--session-from chrome|brave] --project-id <rawId> --items <items.json>
   eoffice-api-write.mjs set-dates --dry-run --project-id <rawId> --ids <id>[,<id>...] (--actual-from-plan | [--start d] [--end d] [--start-plan d] [--end-plan d])
   eoffice-api-write.mjs set-dates --apply --confirm-host <host> [--allow-production] [--session-from chrome|brave] --project-id <rawId> --ids ... (same date options)
   eoffice-api-write.mjs create --dry-run <batch.json>
@@ -166,6 +168,108 @@ function dateTargets(args, current) {
   return target;
 }
 
+// Token reads give raw API items; session reads give list rows. Both expose title, status, percent and the four dates.
+async function readMany({ client, hasToken, session }, ids) {
+  if (hasToken) {
+    return new Map(await Promise.all(ids.map(async (id) => [Number(id), await getItem(client, { id, raw: true })])));
+  }
+  return session.getTasksByIds(ids.map(Number));
+}
+
+function readItems(file) {
+  if (!file) throw new UsageError('report needs --items <items.json>');
+  let items;
+  try {
+    items = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    throw new UsageError(`Cannot read items ${file}: ${err.message}`);
+  }
+  if (!Array.isArray(items) || items.length === 0) throw new UsageError('items must be a non-empty array');
+  const seen = new Set();
+  for (const item of items) {
+    if (!Number.isInteger(item?.id) || item.id <= 0) throw new UsageError('each item needs a numeric id');
+    if (seen.has(item.id)) throw new UsageError(`duplicate item id ${item.id}`);
+    seen.add(item.id);
+    toApiDate(item.start);
+    toApiDate(item.end);
+    if (item.end < item.start) throw new UsageError(`item ${item.id}: end is before start`);
+    if (item.note !== undefined && typeof item.note !== 'string') throw new UsageError(`item ${item.id}: note must be a string`);
+  }
+  return items;
+}
+
+const REPORTED_STATUSES = new Set(['REVIEW', 'COMPLETED']);
+
+function classifyReport(item, data, projectId, hasToken) {
+  if (!data) return { result: 'absent' };
+  if (hasToken && String(data.project_id) !== String(projectId)) {
+    return { result: 'refused', reason: `project_id ${data.project_id} is not ${projectId}` };
+  }
+  const actual = { status: data.status, percent: data.percent, start: isoDate(data.start), end: isoDate(data.end) };
+  const datesMatch = actual.start === item.start && actual.end === item.end;
+  if (REPORTED_STATUSES.has(actual.status) && actual.percent === 100 && datesMatch) return { result: 'done', actual };
+  if (actual.status === 'DOING' && actual.start !== item.start) {
+    return { result: 'waiting', actual, reason: `actual start is ${actual.start}, expected ${item.start}: correct it first (set-dates or the UI)` };
+  }
+  if (actual.status !== 'DOING') {
+    return { result: 'wrong status', actual, reason: `status ${actual.status} with dates ${actual.start}..${actual.end}; the command never moves a task` };
+  }
+  return { result: 'ready', actual };
+}
+
+async function runReport(client, args, env) {
+  const apply = args.includes('--apply');
+  if (apply === args.includes('--dry-run')) throw new UsageError('report needs exactly one of --dry-run or --apply');
+  const projectId = flag(args, '--project-id') ?? env.EOFFICE_PROJECT_ID;
+  if (!projectId) throw new UsageError('report needs --project-id <raw project id> or EOFFICE_PROJECT_ID');
+  const items = readItems(flag(args, '--items'));
+  if (apply) assertApplyAllowed(args, client, env);
+  const hasToken = Boolean(env.EOFFICE_ACCESS_TOKEN);
+  const session = await sessionFor(args, env, client);
+  if (!hasToken && !session) {
+    throw new UsageError('report needs EOFFICE_ACCESS_TOKEN or a browser session (--session-from brave|chrome, EOFFICE_SESSION_COOKIE)');
+  }
+  const linkFor = makeLinker(env);
+  const current = await readMany({ client, hasToken, session }, items.map((item) => item.id));
+  const rows = items.map((item) => ({
+    id: item.id, title: current.get(item.id)?.title, link: linkFor(item.id),
+    ...classifyReport(item, current.get(item.id) ?? null, projectId, hasToken),
+    expected: { start: item.start, end: item.end },
+  }));
+
+  const blocked = rows.some((row) => row.result === 'absent' || row.result === 'refused');
+  const ready = rows.filter((row) => row.result === 'ready');
+  if (!apply || blocked || ready.length === 0) {
+    console.log(JSON.stringify(rows, null, 2));
+    if (blocked) return apply ? 2 : 1;
+    return rows.every((row) => ['done', 'ready'].includes(row.result)) ? 0 : 1;
+  }
+  if (!session) throw new UsageError('report --apply needs a browser session: pass --session-from brave|chrome or set EOFFICE_SESSION_COOKIE');
+
+  const settleMs = Number(env.EOFFICE_SETTLE_MS ?? 3000);
+  let stopped = false;
+  for (const row of ready) {
+    if (stopped) {
+      row.result = 'not attempted';
+      continue;
+    }
+    const item = items.find((entry) => entry.id === row.id);
+    try {
+      await session.reportProgress({ taskId: row.id, date: item.end, percent: 100, note: item.note ?? row.title });
+      await sleep(settleMs);
+      const after = classifyReport(item, (await readMany({ client, hasToken, session }, [row.id])).get(row.id) ?? null, projectId, hasToken);
+      row.result = after.result === 'done' ? 'reported' : 'mismatch';
+      row.actual = after.actual;
+    } catch (err) {
+      row.result = 'error';
+      row.error = firstLine(err);
+    }
+    stopped = !['reported'].includes(row.result);
+  }
+  console.log(JSON.stringify(rows, null, 2));
+  return rows.every((row) => ['reported', 'done'].includes(row.result)) ? 0 : 1;
+}
+
 async function runSetDates(client, args, env) {
   const apply = args.includes('--apply');
   if (apply === args.includes('--dry-run')) throw new UsageError('set-dates needs exactly one of --dry-run or --apply');
@@ -179,9 +283,7 @@ async function runSetDates(client, args, env) {
   }
   const linkFor = makeLinker(env);
   // Without a token the list rows carry no project, so the project guard only applies to token reads.
-  const readTaskFields = async (ids) => (hasToken
-    ? new Map(await Promise.all(ids.map(async (id) => [Number(id), await getItem(client, { id, raw: true })])))
-    : await session.getTasksByIds(ids.map(Number)));
+  const readTaskFields = (ids) => readMany({ client, hasToken, session }, ids);
 
   const rows = [];
   const parsedIds = parseIds(args);
@@ -290,7 +392,7 @@ async function runDelete(client, args, env) {
 
 async function main(argv, env) {
   const [command, ...args] = argv;
-  if (!['search-parent', 'create', 'get', 'delete', 'set-dates'].includes(command)) throw new UsageError(USAGE);
+  if (!['search-parent', 'create', 'get', 'delete', 'set-dates', 'report'].includes(command)) throw new UsageError(USAGE);
   const hasToken = Boolean(env.EOFFICE_ACCESS_TOKEN);
   const client = hasToken
     ? createClient({ baseUrl: env.EOFFICE_BASE_URL, token: env.EOFFICE_ACCESS_TOKEN })
@@ -315,6 +417,7 @@ async function main(argv, env) {
   if (command === 'get') return runGet(client, args, env);
   if (command === 'delete') return runDelete(client, args, env);
   if (command === 'set-dates') return runSetDates(client, args, env);
+  if (command === 'report') return runReport(client, args, env);
 
   const apply = args.includes('--apply');
   if (apply === args.includes('--dry-run')) {

@@ -50,7 +50,14 @@ async function startServer() {
         res.end(JSON.stringify({ message: 'Bạn không có quyền thực hiện chức năng này' }));
         return;
       }
+      const reported = /name="items\[1\]\[date_report\]"\r\n\r\n(\d{2})\/(\d{2})\/(\d{4})/.exec(body);
+      const reportDay = reported ? `${reported[3]}-${reported[2]}-${reported[1]}` : undefined;
+      if (reportDay && row.start && String(row.start).slice(0, 10) > reportDay) {
+        res.end(JSON.stringify({ message: 'Ngày bắt đầu không được lớn hơn ngày kết thúc' }));
+        return;
+      }
       row.status = 'REVIEW'; row.percent = 100;
+      if (reportDay) row.end = `${reportDay} 00:00:00`;
       res.end(JSON.stringify({ close: true, notice: 'Cập nhật thành công' }));
       return;
     }
@@ -1294,6 +1301,123 @@ test('search-parent without a token searches the session task list', async () =>
     const r = await run(['search-parent', '--project-id', '3869', '--search', 'Alpha'], readOnlySession(s));
     assert.equal(r.code, 0, r.err);
     assert.deepEqual(JSON.parse(r.out).map((row) => row.id), [5000]);
+    assert.equal(s.apiHits.length, 0);
+  } finally { s.server.close(); }
+});
+
+const writeItems = (items) => {
+  const dir = mkdtempSync(join(tmpdir(), 'eoffice-items-'));
+  const file = join(dir, 'items.json');
+  writeFileSync(file, JSON.stringify(items));
+  return file;
+};
+const reportArgs = (s, file, mode = ['--dry-run']) => ['report', ...mode, '--project-id', '3869', '--items', file];
+const applyReport = (s, file, extra = sess) => run(
+  ['report', '--apply', '--confirm-host', s.host, '--allow-production', '--project-id', '3869', '--items', file], { ...env(s), ...extra },
+);
+const doing = (id, over = {}) => seed(s0, { ID: id, status: 'DOING', percent: 0, start: '2026-10-09 00:00:00', end: null, ...over });
+let s0;
+
+test('report --dry-run classifies each item and sends nothing', async () => {
+  const s = await startServer();
+  s0 = s;
+  try {
+    doing(6001);
+    doing(6002, { start: '2026-10-19 00:00:00' });
+    doing(6003, { status: 'PENDING', start: null });
+    doing(6004, { status: 'REVIEW', percent: 100, start: '2026-10-09 00:00:00', end: '2026-10-10 00:00:00' });
+    doing(6005, { project_id: 9999 });
+    const items = [6001, 6002, 6003, 6004, 6005, 6006].map((id) => ({ id, start: '2026-10-09', end: '2026-10-10' }));
+    const r = await run(reportArgs(s, writeItems(items)), env(s));
+    assert.equal(r.code, 1);
+    assert.deepEqual(JSON.parse(r.out).map((row) => row.result), ['ready', 'waiting', 'wrong status', 'done', 'refused', 'absent']);
+    assert.equal(s.reports.length + s.updates.length, 0);
+    noToken(r);
+  } finally { s.server.close(); }
+});
+
+test('report --apply reports only ready items, confirms by read-back, and a rerun finds them done', async () => {
+  const s = await startServer();
+  s0 = s;
+  try {
+    doing(6001);
+    doing(6002);
+    const file = writeItems([6001, 6002].map((id) => ({ id, start: '2026-10-09', end: '2026-10-10', note: 'evidence note' })));
+    const r = await applyReport(s, file);
+    assert.equal(r.code, 0, r.err);
+    const rows = JSON.parse(r.out);
+    assert.deepEqual(rows.map((row) => row.result), ['reported', 'reported']);
+    assert.deepEqual(rows[0].actual, { status: 'REVIEW', percent: 100, start: '2026-10-09', end: '2026-10-10' });
+    assert.equal(s.reports.length, 2);
+    assert.equal(s.updates.length, 0);
+    const again = await applyReport(s, file);
+    assert.equal(again.code, 0);
+    assert.deepEqual(JSON.parse(again.out).map((row) => row.result), ['done', 'done']);
+    assert.equal(s.reports.length, 2);
+  } finally { s.server.close(); }
+});
+
+test('report: a waiting item does not stop the ready ones, and exit is 1', async () => {
+  const s = await startServer();
+  s0 = s;
+  try {
+    doing(6001, { start: '2026-10-19 00:00:00' });
+    doing(6002);
+    const r = await applyReport(s, writeItems([6001, 6002].map((id) => ({ id, start: '2026-10-09', end: '2026-10-10' }))));
+    assert.equal(r.code, 1);
+    assert.deepEqual(JSON.parse(r.out).map((row) => row.result), ['waiting', 'reported']);
+    assert.equal(s.reports.length, 1);
+  } finally { s.server.close(); }
+});
+
+test('report: an item whose end is before its start is a usage error before anything is read', async () => {
+  const s = await startServer();
+  s0 = s;
+  try {
+    doing(6001);
+    const r = await run(reportArgs(s, writeItems([{ id: 6001, start: '2026-10-09', end: '2026-10-08' }])), env(s));
+    assert.equal(r.code, 2);
+    assert.match(r.err, /end is before start/);
+    assert.equal(s.itemCalls.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('report --apply stops before any call when an item is absent or in another project', async () => {
+  const s = await startServer();
+  s0 = s;
+  try {
+    doing(6001);
+    const r = await applyReport(s, writeItems([{ id: 6001, start: '2026-10-09', end: '2026-10-10' }, { id: 6999, start: '2026-10-09', end: '2026-10-10' }]));
+    assert.equal(r.code, 2);
+    assert.equal(s.reports.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('report needs the host gate, a session to apply, and a valid items file', async () => {
+  const s = await startServer();
+  s0 = s;
+  try {
+    doing(6001);
+    const file = writeItems([{ id: 6001, start: '2026-10-09', end: '2026-10-10' }]);
+    const noHost = await run(['report', '--apply', '--allow-production', '--project-id', '3869', '--items', file], { ...env(s), ...sess });
+    assert.equal(noHost.code, 2);
+    const noSession = await applyReport(s, file, { EOFFICE_SESSION_COOKIE: '' });
+    assert.equal(noSession.code, 2);
+    for (const bad of [[], [{ id: 'x', start: '2026-10-09', end: '2026-10-10' }], [{ id: 1, start: '2026-10-09', end: '2026-10-01' }], [{ id: 1, start: 'bad', end: '2026-10-10' }]]) {
+      assert.equal((await run(reportArgs(s, writeItems(bad)), env(s))).code, 2, JSON.stringify(bad));
+    }
+    assert.equal(s.reports.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('report works without a token by reading through the session', async () => {
+  const s = await startServer();
+  s0 = s;
+  try {
+    doing(6001);
+    const r = await applyReport(s, writeItems([{ id: 6001, start: '2026-10-09', end: '2026-10-10' }]), { EOFFICE_ACCESS_TOKEN: '', ...sess });
+    assert.equal(r.code, 0, r.err);
+    assert.equal(JSON.parse(r.out)[0].result, 'reported');
     assert.equal(s.apiHits.length, 0);
   } finally { s.server.close(); }
 });

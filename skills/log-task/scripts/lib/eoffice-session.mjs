@@ -106,7 +106,10 @@ export function createSessionClient({ baseUrl, cookie, fetchImpl = globalThis.fe
     let body;
     try { body = JSON.parse(text); } catch { body = null; }
     if (res.status !== 200 || !body || body.error || !body.notice) {
-      throw new EofficeApiError(`Progress report refused: ${(body?.message ?? text).slice(0, 120)}`, { code: 'report' });
+      const message = (body?.message ?? text).slice(0, 120);
+      const hint = /Ngày bắt đầu không được lớn hơn ngày kết thúc/.test(message)
+        ? ' (the actual start is after the report date; correct the actual start first)' : '';
+      throw new EofficeApiError(`Progress report refused: ${message}${hint}`, { code: 'report' });
     }
   }
 

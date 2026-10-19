@@ -88,6 +88,8 @@ Useful checks for `eoffice-api` (details in `skills/log-task/references/eoffice-
 - People in `rules` use the format of the environment: display names on production,
   usernames on UAT. A batch stops when the server drops them.
 - `doctor.mjs --online` makes one read call to confirm the token works.
+- `eoffice-api-write.mjs report --dry-run --project-id <rawId> --items items.json` confirms tasks already carry their
+  evidence dates and report; `--apply` sends the missing reports.
 
 ## Platforms
 
