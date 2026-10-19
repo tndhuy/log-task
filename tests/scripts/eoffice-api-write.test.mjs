@@ -892,6 +892,7 @@ test('a rejected session is reported per task and stops the run', async () => {
     assert.equal(r.code, 1);
     const rows = JSON.parse(r.out);
     assert.equal(rows[0].result, 'error');
+    assert.match(rows[0].error, /not an owner of this task/);
     assert.equal(rows[1].result, 'not attempted');
     assert.equal(s.tasks[0].start.slice(0, 10), '2026-10-19');
   } finally { s.server.close(); }

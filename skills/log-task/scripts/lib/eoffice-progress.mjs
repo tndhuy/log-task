@@ -83,7 +83,9 @@ export function createProgressClient({ baseUrl, cookie, fetchImpl = globalThis.f
     // A refusal answers with only a message; success carries a notice or close flag. The caller still verifies by read-back.
     const refused = body?.error || (body?.message && !body.notice && !body.close);
     if (res.status !== 200 || refused) {
-      throw new EofficeApiError(`Date update refused: ${(body?.message ?? text).slice(0, 120)}`, { code: 'dates' });
+      const message = (body?.message ?? text).slice(0, 120);
+      const hint = /permission|quyền/i.test(message) ? ' (likely your account is not an owner of this task; the creator is the API account)' : '';
+      throw new EofficeApiError(`Date update refused: ${message}${hint}`, { code: 'dates' });
     }
   }
 
