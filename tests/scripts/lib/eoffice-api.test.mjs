@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  EofficeApiError, createClient, findParents, findDuplicate, insertTask, isUatHost,
+  EofficeApiError, createClient, findParents, findDuplicate, getItem, insertTask, isUatHost, taskLink,
 } from '../../../skills/log-task/scripts/lib/eoffice-api.mjs';
 
 const TOKEN = 'secret-token-123';
@@ -159,4 +159,41 @@ test('isUatHost matches the allowlist exactly, not lookalike hosts', () => {
 test('isUatHost honors a comma-separated override and ignores the default then', () => {
   assert.equal(isUatHost('a.test', 'a.test, b.test'), true);
   assert.equal(isUatHost('eoffice-uat.novagroup.vn', 'a.test'), false);
+});
+
+test('getItem returns the task data and asks for raw values only on request', async () => {
+  const fetchImpl = fakeFetch(() => ({ body: { error: false, data: { ID: 7, title: 'T' } } }));
+  const c = createClient({ baseUrl: 'https://eoffice-uat.example.vn', token: TOKEN, fetchImpl });
+  assert.deepEqual(await getItem(c, { id: 7 }), { ID: 7, title: 'T' });
+  assert.equal(fetchImpl.calls[0].url.pathname, '/api/work/normal/item');
+  assert.equal(fetchImpl.calls[0].url.searchParams.get('ID'), '7');
+  assert.equal(fetchImpl.calls[0].url.searchParams.has('field_raws'), false);
+  await getItem(c, { id: 7, raw: true });
+  assert.equal(fetchImpl.calls[1].url.searchParams.get('field_raws'), 'allfield');
+});
+
+test('getItem returns null for "Post not found"', async () => {
+  const c = client(() => ({ body: { error: true, message: 'Post not found' } }));
+  assert.equal(await getItem(c, { id: 1 }), null);
+});
+
+test('getItem lets every other API error through without the token', async () => {
+  const c = client(() => ({ body: { error: true, code: 'not object', message: `no ${TOKEN}` } }));
+  await assert.rejects(
+    () => getItem(c, { id: 1 }),
+    (e) => e instanceof EofficeApiError && e.code === 'not object' && !e.message.includes(TOKEN),
+  );
+});
+
+test('getItem rejects a body without a data object', async () => {
+  const c = client(() => ({ body: { error: false } }));
+  await assert.rejects(() => getItem(c, { id: 1 }), (e) => e.code === 'bad_body');
+});
+
+test('taskLink fills {origin} and {id}, and is undefined without a template', () => {
+  const baseUrl = 'https://eoffice.novagroup.vn/some/path';
+  const template = '{origin}/work-normal-normal/view?ID={id}';
+  assert.equal(taskLink(2133680, { baseUrl, template }), 'https://eoffice.novagroup.vn/work-normal-normal/view?ID=2133680');
+  assert.equal(taskLink(1, { baseUrl, template: '' }), undefined);
+  assert.equal(taskLink(1, { baseUrl, template: undefined }), undefined);
 });

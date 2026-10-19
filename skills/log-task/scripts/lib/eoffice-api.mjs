@@ -10,6 +10,8 @@ export class EofficeApiError extends Error {
 const GETS = '/api/work/normal/gets';
 const INSERT = '/api/work/normal/insert';
 const UPDATE = '/api/work/normal/update';
+const ITEM = '/api/work/normal/item';
+const NOT_FOUND_MESSAGE = 'Post not found';
 
 export function createClient({ baseUrl, token, fetchImpl = globalThis.fetch }) {
   if (!baseUrl) throw new EofficeApiError('EOFFICE_BASE_URL is not set', { code: 'missing_env' });
@@ -99,6 +101,30 @@ export async function readTask(client, { title, parentId }) {
   const rows = await gets(client, { s: title, parent_id: String(parentId) }, 100);
   const hit = rows.find((row) => row.title === title);
   return hit ? { id: hit.ID, title: hit.title, status: hit.status, percent: hit.percent } : null;
+}
+
+export async function getItem(client, { id, raw = false }) {
+  const params = { ID: String(id) };
+  if (raw) params.field_raws = 'allfield';
+  let body;
+  try {
+    body = await client.call('GET', ITEM, params);
+  } catch (err) {
+    if (err instanceof EofficeApiError && err.message.trim() === NOT_FOUND_MESSAGE) return null;
+    throw err;
+  }
+  if (body.data === null || typeof body.data !== 'object' || Array.isArray(body.data)) {
+    throw new EofficeApiError(`Unexpected response body from ${client.host}`, { code: 'bad_body' });
+  }
+  return body.data;
+}
+
+// Returns undefined without a template: the API carries no URL, so a link is never guessed.
+export function taskLink(id, { baseUrl, template }) {
+  if (!template) return undefined;
+  return template
+    .replaceAll('{origin}', new URL(baseUrl).origin)
+    .replaceAll('{id}', encodeURIComponent(String(id)));
 }
 
 export function updateTask(client, { id, status }) {
