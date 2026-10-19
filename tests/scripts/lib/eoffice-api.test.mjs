@@ -209,3 +209,23 @@ test('deleteTask posts delIds with a single id and refuses lists', async () => {
   await assert.rejects(() => deleteTask(c, { id: '55,56' }), (e) => e.code === 'bad_id');
   assert.equal(fetchImpl.calls.length, 1);
 });
+
+test('known error codes get a one-line hint, the code stays and the token is scrubbed', async () => {
+  const cases = [
+    ['not object', /API key has no object for work\/normal.*Last access time/],
+    ['action not scopes', /lacks this action.*grant insert\/update/],
+    ['no_action', /unknown eOffice action/],
+  ];
+  for (const [code, pattern] of cases) {
+    const c = client(() => ({ body: { error: true, code, message: `rejected ${TOKEN}` } }));
+    await assert.rejects(
+      () => c.call('GET', '/api/work/normal/gets'),
+      (e) => e.code === code && pattern.test(e.message) && !e.message.includes('\n') && !e.message.includes(TOKEN),
+    );
+  }
+});
+
+test('an unknown error code gets no hint', async () => {
+  const c = client(() => ({ body: { error: true, code: 'weird', message: 'plain' } }));
+  await assert.rejects(() => c.call('GET', '/x'), (e) => e.message === 'plain');
+});

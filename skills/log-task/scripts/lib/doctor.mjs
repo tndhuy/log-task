@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import { ConfigError, resolveProject } from './resolve-project.mjs';
-import { isUatHost } from './eoffice-api.mjs';
+import { EofficeApiError, createClient, isUatHost, pingApi } from './eoffice-api.mjs';
 
 const MIN_NODE = [22, 13];
 
@@ -78,4 +78,15 @@ export function runChecks({
   checks.push(projectCheck);
   if (resolved?.targets.some((t) => t.platform === 'eoffice-api')) checks.push(...checkEnv(env));
   return checks;
+}
+
+export async function checkToken({ env, fetchImpl }) {
+  try {
+    const client = createClient({ baseUrl: env.EOFFICE_BASE_URL, token: env.EOFFICE_ACCESS_TOKEN, fetchImpl });
+    await pingApi(client);
+    return ok('token', `accepted by ${client.host}`);
+  } catch (err) {
+    if (err instanceof EofficeApiError) return fail('token', err.message);
+    throw err;
+  }
 }

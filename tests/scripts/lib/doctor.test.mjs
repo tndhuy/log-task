@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runChecks } from '../../../skills/log-task/scripts/lib/doctor.mjs';
+import { checkToken, runChecks } from '../../../skills/log-task/scripts/lib/doctor.mjs';
 
 const gitOk = () => ({ status: 0, stdout: 'git version 2.50\n' });
 const config = {
@@ -64,4 +64,30 @@ test('flags a host outside the UAT list', () => {
 test('manual projects need no environment variables', () => {
   const checks = runChecks({ ...base, cwd: '/w/solo' });
   assert.equal(byName(checks, 'EOFFICE_BASE_URL'), undefined);
+});
+
+const onlineEnv = { EOFFICE_BASE_URL: 'https://eoffice-uat.novagroup.vn', EOFFICE_ACCESS_TOKEN: 'sekret-token' };
+const reply = (body) => async () => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
+
+test('checkToken passes when one read succeeds, with limit=1', async () => {
+  let seen;
+  const fetchImpl = async (url, init) => { seen = new URL(url); return reply({ error: false, data: [] })(url, init); };
+  const check = await checkToken({ env: onlineEnv, fetchImpl });
+  assert.equal(check.status, 'ok');
+  assert.equal(seen.searchParams.get('limit'), '1');
+});
+
+test('checkToken surfaces the hint for "not object" without the token', async () => {
+  const fetchImpl = reply({ error: true, code: 'not object', message: 'accesstoken not of object' });
+  const check = await checkToken({ env: onlineEnv, fetchImpl });
+  assert.equal(check.status, 'fail');
+  assert.match(check.detail, /Last access time/);
+  assert.equal(JSON.stringify(check).includes('sekret-token'), false);
+});
+
+test('checkToken reports a network failure as a failed check', async () => {
+  const fetchImpl = async () => { throw new Error('ECONNREFUSED'); };
+  const check = await checkToken({ env: onlineEnv, fetchImpl });
+  assert.equal(check.status, 'fail');
+  assert.match(check.detail, /failed/);
 });

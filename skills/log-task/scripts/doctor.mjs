@@ -2,7 +2,7 @@
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDataDir } from './lib/data-dir.mjs';
-import { runChecks } from './lib/doctor.mjs';
+import { checkToken, runChecks } from './lib/doctor.mjs';
 import { loadDefaultEnv } from './lib/env-file.mjs';
 
 const skillDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -17,6 +17,8 @@ try {
 }
 
 const checks = runChecks({ env: process.env, cwd: process.cwd(), dataDir });
+const canReachApi = process.env.EOFFICE_BASE_URL && process.env.EOFFICE_ACCESS_TOKEN;
+if (process.argv.includes('--online') && canReachApi) checks.push(await checkToken({ env: process.env }));
 console.log(`log-task doctor (data directory: ${dataDir})`);
 for (const { name, status, detail } of checks) console.log(`${MARK[status]} ${name}: ${detail}`);
 process.exit(checks.some((c) => c.status === 'fail') ? 1 : 0);

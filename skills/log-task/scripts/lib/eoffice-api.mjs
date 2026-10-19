@@ -14,6 +14,13 @@ const ITEM = '/api/work/normal/item';
 const DELETE = '/api/work/normal/delete';
 const NOT_FOUND_MESSAGE = 'Post not found';
 
+// Keyed by the API's error code; the hint is appended on one line so CLI output keeps it.
+const ERROR_HINTS = {
+  'not object': "token unknown, truncated, or its API key has no object for work/normal; compare the token length with the admin page and check 'Last access time'",
+  'action not scopes': 'the API key can read but lacks this action; ask the eOffice admin to grant insert/update on work/normal',
+  no_action: 'unknown eOffice action',
+};
+
 export function createClient({ baseUrl, token, fetchImpl = globalThis.fetch }) {
   if (!baseUrl) throw new EofficeApiError('EOFFICE_BASE_URL is not set', { code: 'missing_env' });
   if (!token) throw new EofficeApiError('EOFFICE_ACCESS_TOKEN is not set', { code: 'missing_env' });
@@ -60,9 +67,10 @@ export function createClient({ baseUrl, token, fetchImpl = globalThis.fetch }) {
       throw new EofficeApiError(`Unexpected response body from ${host}`, { code: 'bad_body', status: res.status });
     }
     if (body.error === true) {
-      throw new EofficeApiError(scrub(body.message || body.code || 'API error'), {
-        code: String(body.code ?? 'api_error'), status: res.status,
-      });
+      const code = String(body.code ?? 'api_error');
+      const hint = ERROR_HINTS[code];
+      const message = scrub(body.message || body.code || 'API error');
+      throw new EofficeApiError(hint ? `${message} (hint: ${hint})` : message, { code, status: res.status });
     }
     if (!res.ok) {
       throw new EofficeApiError(`HTTP ${res.status} from ${host}`, { code: 'http', status: res.status });
@@ -85,6 +93,10 @@ async function gets(client, filter, limit) {
     throw new EofficeApiError(`Unexpected response body from ${client.host}`, { code: 'bad_body' });
   }
   return body.data ?? [];
+}
+
+export async function pingApi(client) {
+  await gets(client, {}, 1);
 }
 
 export async function findParents(client, { projectId, search, limit = 5 }) {
