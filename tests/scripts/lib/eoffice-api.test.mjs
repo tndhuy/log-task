@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  EofficeApiError, createClient, findParents, findDuplicate, deleteTask, getItem, insertTask, isUatHost, taskLink,
+  EofficeApiError, createClient, findParents, findDuplicate, deleteTask, getItem, insertTask, updateTask, isUatHost, taskLink,
 } from '../../../skills/log-task/scripts/lib/eoffice-api.mjs';
 
 const TOKEN = 'secret-token-123';
@@ -228,4 +228,15 @@ test('known error codes get a one-line hint, the code stays and the token is scr
 test('an unknown error code gets no hint', async () => {
   const c = client(() => ({ body: { error: true, code: 'weird', message: 'plain' } }));
   await assert.rejects(() => c.call('GET', '/x'), (e) => e.message === 'plain');
+});
+
+test('updateTask sends only the status and refuses any other field without a request', async () => {
+  const fetchImpl = fakeFetch(() => ({ body: { error: false } }));
+  const c = createClient({ baseUrl: 'https://eoffice-uat.example.vn', token: TOKEN, fetchImpl });
+  await updateTask(c, { id: 9, status: 'Đang đánh giá' });
+  assert.equal(fetchImpl.calls.length, 1);
+  assert.equal(new URLSearchParams(fetchImpl.calls[0].init.body).get('ID'), '9');
+  await assert.rejects(() => updateTask(c, { id: 9, status: 'x', start: '09/10/2026' }), (e) => e.code === 'bad_update');
+  await assert.rejects(() => updateTask(c, { id: 9, assign_ids: 'x' }), (e) => e.code === 'bad_update');
+  assert.equal(fetchImpl.calls.length, 1);
 });

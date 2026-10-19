@@ -189,6 +189,14 @@ and the response carries the new task's `redirect: work-normal-normal/view?ID=<i
 - Owners stay as the rules say; only the creator changes. `rules.flags` is ignored: the form's own defaults apply.
 - Finishing: a flat task gets the progress report at 100% (it moves to REVIEW by itself); a parent or child
   gets a status update. The people check, duplicate guard and batch stop work as with the API.
+- Who may do what (production, observed): the task's **creator** is the signed-in user; the **progress report**
+  needs the user to be an assignee; editing **actual dates** (`set-dates`) needs the user to be an owner. A user who
+  is only the creator can do neither. For tasks logged on someone else's behalf, pass `--no-report` to finish flat
+  tasks with a status update instead; their actual dates then show the run date.
+- A report dated inside the plan window gives actual start = plan start and actual end = the report date, so a
+  session-created assignee needs no date correction.
+- `update` with `assign_ids` as a display name does change the assignees (so a temporary assignee can be removed), but
+  the same call clears the actual start and end. Do not use it to swap people after reporting.
 - The form's behaviour was observed once on production (task with creator 8990, department set); treat the
   field names as unversioned UI, like the report route.
 

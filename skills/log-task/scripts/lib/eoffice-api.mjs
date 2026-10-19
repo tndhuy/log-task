@@ -146,7 +146,12 @@ export async function deleteTask(client, { id }) {
   return client.call('POST', DELETE, { delIds: String(id) });
 }
 
-export function updateTask(client, { id, status }) {
+// Only the status may change here: any other field makes the server clear the actual dates (production F8).
+export async function updateTask(client, { id, status, ...rest }) {
+  const extra = Object.keys(rest);
+  if (extra.length) {
+    throw new EofficeApiError(`updateTask only changes the status, got: ${extra.join(', ')}`, { code: 'bad_update' });
+  }
   return client.call('POST', UPDATE, { ID: String(id), status });
 }
 
