@@ -189,12 +189,15 @@ and the response carries the new task's `redirect: work-normal-normal/view?ID=<i
 - Owners stay as the rules say; only the creator changes. `rules.flags` is ignored: the form's own defaults apply.
 - Finishing: a flat task gets the progress report at 100% (it moves to REVIEW by itself); a parent or child
   gets a status update. The people check, duplicate guard and batch stop work as with the API.
-- **No token needed for create.** Without `EOFFICE_ACCESS_TOKEN` the CLI reads through the same session: the duplicate
-  guard searches the task list with `GET /work-normal-normal?v=list&tab=all_all&s=<title>&_json=1` (the box's own
-  `s` parameter only works together with an explicit tab; one request per task), the people check reads
-  the edit form while the task is still DOING, and the final status comes from the detail page. A batch containing
-  parents, children or `--no-report` still needs the token because it finishes with a status update, and `get`,
-  `delete`, `search-parent` always need it.
+- **The token is preferred, the session is the fallback.** When `EOFFICE_ACCESS_TOKEN` is set every read uses the API.
+  Without it the CLI reads through the signed-in session (`--session-from brave|chrome` or `EOFFICE_SESSION_COOKIE`):
+  - duplicate guard and `search-parent`: `GET /work-normal-normal?v=list&tab=all_all&s=<text>&_json=1`;
+  - `get` and `set-dates` reads: the same list with `ids=1,2,3`, which returns title, owner and assignee IDs, status,
+    percent, plan and actual dates and the parent. It has no project or creator, so `get` prints no `creator` and
+    `set-dates` skips its project guard, and `search-parent` ignores `--project-id`;
+  - people check right after creating: the task's edit form, which only opens while it is DOING;
+  - final status: the task's detail page.
+  Still token-only: `delete`, the status update that finishes parents, children and `--no-report` tasks, and `--via api`.
 - Who may do what (production, observed): the task's **creator** is the signed-in user. While the task is **DOING** the
   creator who is also its assignee may open the edit form and the dates dialog; changing the **status** and **deleting**
   are refused. The **progress report** needs the user to be an assignee. Once the task is **REVIEW** the edit form is

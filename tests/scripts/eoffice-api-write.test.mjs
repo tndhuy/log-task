@@ -58,9 +58,13 @@ async function startServer() {
     if (url.pathname === '/work-normal-normal' && url.searchParams.get('v') === 'list') {
       if (!sessionOk) { res.end(JSON.stringify({ message: 'Bạn không có quyền thực hiện chức năng này' })); return; }
       const needle = url.searchParams.get('s');
-      const mine = tasks.filter((t) => t.created_by_id === 8990 && (!needle || t.title.includes(needle)));
+      const wanted = url.searchParams.get('ids')?.split(',');
+      const mine = wanted
+        ? tasks.filter((t) => wanted.includes(String(t.ID)))
+        : tasks.filter((t) => t.created_by_id === 8990 && (!needle || t.title.includes(needle)));
+      const ui = (value) => (value ? `${String(value).slice(8, 10)}/${String(value).slice(5, 7)}/${String(value).slice(0, 4)}` : '');
       const page = Number(url.searchParams.get('p') ?? 1);
-      const rowsHtml = mine.slice((page - 1) * 50, page * 50).map((t) => `{"view":"list","ID":${t.ID},"vals":{"title":${JSON.stringify(t.title)},"owner_ids":"${t.owner_ids}","assign_ids":"${t.assign_ids ?? ''}","status":"${t.status}","percent":${t.percent},"start_plan":"06/10/2026"},"fields":{"title":"<a class=table-sub-title href=/work-normal-normal/view?ID=${t.parent_id}>Parent</a>"}}`).join(',');
+      const rowsHtml = mine.slice((page - 1) * 50, page * 50).map((t) => `{"view":"list","ID":${t.ID},"vals":{"title":${JSON.stringify(t.title)},"owner_ids":"${t.owner_ids}","assign_ids":"${t.assign_ids ?? ''}","status":"${t.status}","percent":${t.percent},"start_plan":"${ui(t.start_plan)}","start":"${ui(t.start)}","end_plan":"${ui(t.end_plan)}","end":"${ui(t.end)}"},"fields":{"title":"<a class=table-sub-title href=/work-normal-normal/view?ID=${t.parent_id}>Parent</a>"}}`).join(',');
       res.end(`<elem data-props='{"rows":[${rowsHtml}],"page":{"total":${mine.length},"current":${page},"range":50}}'></elem>`);
       return;
     }
@@ -1228,5 +1232,68 @@ test('commands that only the token can serve fail with exit 2 when it is missing
       assert.equal(r.code, 2, args[0]);
       assert.match(r.err, /EOFFICE_ACCESS_TOKEN/);
     }
+  } finally { s.server.close(); }
+});
+
+const readOnlySession = (s) => ({ ...env(s), EOFFICE_ACCESS_TOKEN: '', ...sess });
+
+test('get without a token reads the task list through the session', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    const r = await run(['get', '--ids', '5000,424242'], readOnlySession(s));
+    assert.equal(r.code, 1);
+    const [found, missing] = JSON.parse(r.out);
+    assert.equal(found.found, true);
+    assert.equal(found.title, 'Seeded task');
+    assert.equal(found.startPlan, '2026-10-06');
+    assert.equal(found.start, '2026-10-19');
+    assert.equal(found.owner, '7001');
+    assert.equal(missing.found, false);
+    assert.equal(s.apiHits.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('get without a token or a session exits 2 and says what is needed', async () => {
+  const s = await startServer();
+  try {
+    const r = await run(['get', '--ids', '5000'], { ...env(s), EOFFICE_ACCESS_TOKEN: '' });
+    assert.equal(r.code, 2);
+    assert.match(r.err, /EOFFICE_ACCESS_TOKEN or a browser session/);
+  } finally { s.server.close(); }
+});
+
+test('with a token, get keeps using the API even when a session is present', async () => {
+  const s = await startServer();
+  try {
+    seed(s);
+    const r = await run(['get', '--ids', '5000'], { ...env(s), ...sess });
+    assert.equal(r.code, 0, r.err);
+    assert.ok(s.apiHits.length > 0);
+  } finally { s.server.close(); }
+});
+
+test('set-dates without a token reads, writes and confirms through the session only', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    const dry = await run(['set-dates', '--dry-run', '--project-id', '3869', '--ids', '5000', '--actual-from-plan'], readOnlySession(s));
+    assert.equal(dry.code, 0, dry.err);
+    assert.equal(JSON.parse(dry.out)[0].result, 'would update');
+    const applied = await run(['set-dates', '--apply', '--confirm-host', s.host, '--allow-production', '--project-id', '3869', '--ids', '5000', '--actual-from-plan'], readOnlySession(s));
+    assert.equal(applied.code, 0, applied.err);
+    assert.equal(JSON.parse(applied.out)[0].result, 'updated');
+    assert.equal(s.apiHits.length, 0);
+  } finally { s.server.close(); }
+});
+
+test('search-parent without a token searches the session task list', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { created_by_id: 8990, title: 'OneNova Parent Alpha' });
+    const r = await run(['search-parent', '--project-id', '3869', '--search', 'Alpha'], readOnlySession(s));
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(JSON.parse(r.out).map((row) => row.id), [5000]);
+    assert.equal(s.apiHits.length, 0);
   } finally { s.server.close(); }
 });

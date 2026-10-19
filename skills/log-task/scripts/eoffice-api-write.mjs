@@ -110,18 +110,32 @@ function assertApplyAllowed(args, client, env) {
 
 const orUndefined = (value) => (value === null || value === '' ? undefined : value);
 
+// With a token the API answers; without one the signed-in session reads the task list.
+async function sessionFor(args, env, client) {
+  const sessionFrom = flag(args, '--session-from');
+  if (sessionFrom !== undefined && !['chrome', 'brave'].includes(sessionFrom)) throw new UsageError('--session-from must be chrome or brave');
+  const cookie = env.EOFFICE_SESSION_COOKIE || (sessionFrom ? await cookieFromBrowser(sessionFrom, client.host) : '');
+  return cookie ? createSessionClient({ baseUrl: env.EOFFICE_BASE_URL, cookie }) : null;
+}
+
 async function runGet(client, args, env) {
   const raw = args.includes('--raw');
   const linkFor = makeLinker(env);
+  const ids = parseIds(args);
+  const session = env.EOFFICE_ACCESS_TOKEN ? null : await sessionFor(args, env, client);
+  if (!env.EOFFICE_ACCESS_TOKEN && !session) {
+    throw new UsageError('get needs EOFFICE_ACCESS_TOKEN or a browser session (--session-from brave|chrome, EOFFICE_SESSION_COOKIE)');
+  }
+  const fromSession = session ? await session.getTasksByIds(ids) : null;
   const rows = [];
-  for (const id of parseIds(args)) {
-    const data = await getItem(client, { id, raw });
+  for (const id of ids) {
+    const data = session ? (fromSession.get(Number(id)) ?? null) : await getItem(client, { id, raw });
     const link = linkFor(id);
     rows.push(data ? {
       id: Number(id), found: true, title: data.title, status: data.status, percent: data.percent,
       startPlan: data.start_plan, endPlan: data.end_plan, start: data.start, end: data.end,
       owner: orUndefined(data.owner_ids), assignees: orUndefined(data.assign_ids),
-      creator: data.created_by_id, parentId: data.parent_id, link,
+      creator: data.created_by_id, parentId: data.parent_id ?? data.parentId, link,
     } : { id: Number(id), found: false, link });
   }
   console.log(JSON.stringify(rows, null, 2));
@@ -158,17 +172,25 @@ async function runSetDates(client, args, env) {
   const projectId = flag(args, '--project-id') ?? env.EOFFICE_PROJECT_ID;
   if (!projectId) throw new UsageError('set-dates needs --project-id <raw project id> or EOFFICE_PROJECT_ID');
   if (apply) assertApplyAllowed(args, client, env);
-  const sessionFrom = flag(args, '--session-from');
-  if (sessionFrom !== undefined && !['chrome', 'brave'].includes(sessionFrom)) throw new UsageError('--session-from must be chrome or brave');
-  if (sessionFrom !== undefined && !apply) throw new UsageError('--session-from only applies to --apply');
+  const hasToken = Boolean(env.EOFFICE_ACCESS_TOKEN);
+  const session = await sessionFor(args, env, client);
+  if (!hasToken && !session) {
+    throw new UsageError('set-dates needs a browser session (--session-from brave|chrome, EOFFICE_SESSION_COOKIE) or EOFFICE_ACCESS_TOKEN to read');
+  }
   const linkFor = makeLinker(env);
+  // Without a token the list rows carry no project, so the project guard only applies to token reads.
+  const readTaskFields = async (ids) => (hasToken
+    ? new Map(await Promise.all(ids.map(async (id) => [Number(id), await getItem(client, { id, raw: true })])))
+    : await session.getTasksByIds(ids.map(Number)));
 
   const rows = [];
-  for (const id of parseIds(args)) {
-    const data = await getItem(client, { id, raw: true });
+  const parsedIds = parseIds(args);
+  const current = await readTaskFields(parsedIds);
+  for (const id of parsedIds) {
+    const data = current.get(Number(id)) ?? null;
     const row = { id: Number(id), title: data?.title, link: linkFor(id) };
     if (!data) rows.push({ ...row, result: 'absent' });
-    else if (String(data.project_id) !== String(projectId)) {
+    else if (hasToken && String(data.project_id) !== String(projectId)) {
       rows.push({ ...row, result: 'refused', reason: `project_id ${data.project_id} is not ${projectId}` });
     } else {
       const before = {
@@ -185,9 +207,7 @@ async function runSetDates(client, args, env) {
     return blocked ? (apply ? 2 : 1) : 0;
   }
 
-  const cookie = env.EOFFICE_SESSION_COOKIE || (sessionFrom ? await cookieFromBrowser(sessionFrom, client.host) : '');
-  if (!cookie) throw new UsageError('set-dates --apply needs a browser session: pass --session-from brave|chrome or set EOFFICE_SESSION_COOKIE');
-  const session = createSessionClient({ baseUrl: env.EOFFICE_BASE_URL, cookie });
+  if (!session) throw new UsageError('set-dates --apply needs a browser session: pass --session-from brave|chrome or set EOFFICE_SESSION_COOKIE');
   const settleMs = Number(env.EOFFICE_SETTLE_MS ?? 3000);
   let failed = false;
   for (const row of rows.filter((entry) => entry.result === 'pending')) {
@@ -198,7 +218,7 @@ async function runSetDates(client, args, env) {
     try {
       await session.updateDates({ taskId: row.id, ...row.after });
       await sleep(settleMs);
-      const data = await getItem(client, { id: row.id, raw: true });
+      const data = (await readTaskFields([row.id])).get(row.id);
       const actual = {
         startPlan: isoDate(data?.start_plan), endPlan: isoDate(data?.end_plan), start: isoDate(data?.start), end: isoDate(data?.end),
       };
@@ -277,10 +297,17 @@ async function main(argv, env) {
     : createOfflineClient({ baseUrl: env.EOFFICE_BASE_URL });
 
   if (command === 'search-parent') {
-    const rows = await findParents(client, {
-      projectId: flag(args, '--project-id', { required: true }),
-      search: flag(args, '--search', { required: true }),
-    });
+    const projectId = flag(args, '--project-id', { required: true });
+    const search = flag(args, '--search', { required: true });
+    let rows;
+    if (hasToken) {
+      rows = await findParents(client, { projectId, search });
+    } else {
+      // The session list has no project column, so this searches every task the user can see.
+      const session = await sessionFor(args, env, client);
+      if (!session) throw new UsageError('search-parent needs EOFFICE_ACCESS_TOKEN or a browser session (--session-from brave|chrome)');
+      rows = (await session.listTasks({ search })).slice(0, 5).map((row) => ({ id: row.id, title: row.title, status: row.status }));
+    }
     console.log(JSON.stringify(rows, null, 2));
     return 0;
   }

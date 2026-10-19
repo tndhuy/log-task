@@ -51,7 +51,7 @@ the skill directory, so updates never overwrite it.
    | Variable | Required | Meaning |
    |---|---|---|
    | `EOFFICE_BASE_URL` | yes | Origin only, for example `https://host.example.vn` (no path) |
-   | `EOFFICE_ACCESS_TOKEN` | no | Integration token issued by an admin. Needed for `delete`, `get`, parent/child tasks and `--via api`; `create --via session` works without it |
+   | `EOFFICE_ACCESS_TOKEN` | no | Integration token issued by an admin. Used first whenever it is set (faster, more complete). Without it, `create --via session`, `get`, `set-dates` and `search-parent` read through your browser session. Only `delete`, parent/child tasks, `--no-report` and `--via api` still need it |
    | `EOFFICE_UAT_HOSTS` | no | Comma-separated hosts treated as UAT. Any other host needs an explicit "write to production" instruction |
    | `EOFFICE_SESSION_COOKIE` | no | Session cookie for the progress-report record. Prefer `--session-from brave\|chrome` |
    | `EOFFICE_SETTLE_MS` | no | Pause between API steps, default 3000 |

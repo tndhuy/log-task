@@ -176,11 +176,12 @@ export function createSessionClient({ baseUrl, cookie, fetchImpl = globalThis.fe
 
   // The list search box sends `s=<text>` and only takes effect with an explicit tab; all_all covers every task the
   // user can see, so a duplicate made by anyone is found.
-  async function listTasks({ search, tab = 'all_all' } = {}) {
+  async function listTasks({ search, ids, tab = 'all_all' } = {}) {
     const rows = [];
     for (let page = 1; page <= LIST_PAGES; page += 1) {
       const query = new URLSearchParams({ v: 'list', tab, _json: '1' });
       if (search) query.set('s', search);
+      if (ids) query.set('ids', ids.join(','));
       if (page > 1) query.set('p', String(page));
       const { status, text } = await getText(`${LIST}?${query}`, LIST);
       if (status !== 200) throw new EofficeApiError(`Task list refused (HTTP ${status})`, { code: 'session' });
@@ -191,6 +192,9 @@ export function createSessionClient({ baseUrl, cookie, fetchImpl = globalThis.fe
     }
     return rows;
   }
+
+  // `ids=1,2,3` filters the list to those tasks; unknown ids are simply absent from the answer.
+  const getTasksByIds = async (ids) => new Map((await listTasks({ ids })).map((row) => [row.id, row]));
 
   const findByTitle = async ({ title, parentId }) => (
     (await listTasks({ search: title })).find((row) => row.title === title && String(row.parentId) === String(parentId)) ?? null
@@ -214,5 +218,5 @@ export function createSessionClient({ baseUrl, cookie, fetchImpl = globalThis.fe
     return task;
   }
 
-  return { reportProgress, updateDates, addTask, listTasks, findByTitle, readTask };
+  return { reportProgress, updateDates, addTask, listTasks, getTasksByIds, findByTitle, readTask };
 }
