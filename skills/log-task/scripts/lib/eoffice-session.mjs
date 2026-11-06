@@ -114,11 +114,11 @@ export function createSessionClient({ baseUrl, cookie, fetchImpl = globalThis.fe
   }
 
   // Every date is sent together: an update that omits a date can clear it (seen with the API's update).
-  async function updateDates({ taskId, startPlan, endPlan, start, end }) {
+  async function updateDates({ taskId, startPlan, endPlan, start }) {
     const csrf = await freshCsrf();
     const form = new FormData();
     form.append('ID', String(taskId));
-    for (const [key, value] of [['start_plan', startPlan], ['end_plan', endPlan], ['start', start], ['end', end]]) {
+    for (const [key, value] of [['start_plan', startPlan], ['end_plan', endPlan], ['start', start]]) {
       if (value) form.append(key, toApiDate(value));
     }
     form.append('inlineLogin', '1');

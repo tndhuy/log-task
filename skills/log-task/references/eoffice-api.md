@@ -231,20 +231,25 @@ A refusal about the start date carries the hint to correct the actual start firs
 
 ## Correcting actual dates (`set-dates`)
 
-The REVIEW status update stamps the actual dates with the run date (F2). `set-dates` fixes them
-afterwards through the UI route `POST /work-task-task/realtime?_json=1`, which needs a browser
-session like the progress report (`--session-from brave|chrome` or `EOFFICE_SESSION_COOKIE`).
+`set-dates` corrects the actual **start** (and the plan dates) through the UI route
+`POST /work-task-task/realtime?_json=1`, which needs a browser session like the progress report
+(`--session-from brave|chrome` or `EOFFICE_SESSION_COOKIE`). It cannot fix the actual end.
 
+- Observed on production (2026-10-26, task 2148038): an update through this route set the actual start
+  but **cleared the actual end**. The UI request captured on 2026-10-19 carries only `ID`, `start_plan`,
+  `end_plan` and `start`; no field for the actual end is known. The actual end comes from the
+  progress report date, or from the UI.
+- So `--end` is rejected (exit 2), `--actual-from-plan` sets only the actual start to the plan start,
+  and a task whose actual end is already set (REVIEW, reported) is `refused` before any call.
+  This makes `set-dates` useful for a DOING task whose actual start is wrong; fix a REVIEW task's
+  dates in the UI as its owner.
 - `set-dates --dry-run --project-id <rawId> --ids 1,2 --actual-from-plan` (read-only) shows each
-  task's dates before and after.
-- `--actual-from-plan` sets the actual start/end to the plan dates; or pass `--start`, `--end`,
-  `--start-plan`, `--end-plan` as `YYYY-MM-DD`. Use one form or the other, not both.
+  task's dates before and after. Or pass `--start`, `--start-plan`, `--end-plan` as `YYYY-MM-DD`;
+  use one form or the other, not both.
 - `set-dates --apply --confirm-host <host> [--allow-production] --session-from brave --project-id ...`
-  has the same host gate as `create`. Every date is sent together, because an update that omits a date can clear it.
+  has the same host gate as `create`. The date route needs the task's owner (not the creator, not an admin).
 - The CLI reads the task back and reports `updated`, `unchanged` or `mismatch`; a refusal or a
   mismatch stops the run. Tasks in another project, or missing, make it exit 2 before any call.
-- The `end` field name and the response shape of this route are not yet verified on a real host;
-  the read-back is the check.
 
 ## Production behaviour (observed 2026-10-16)
 

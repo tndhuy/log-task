@@ -122,9 +122,11 @@ async function startServer() {
       const row = tasks.find((t) => String(t.ID) === fields.ID);
       const iso = (value) => (value ? `${value.slice(6, 10)}-${value.slice(3, 5)}-${value.slice(0, 2)} 00:00:00` : undefined);
       if (row && !flags.ignoreRealtime) {
-        for (const [field, key] of [['start_plan', 'start_plan'], ['end_plan', 'end_plan'], ['start', 'start'], ['end', 'end']]) {
-          if (fields[field]) row[key] = iso(fields[field]);
+        for (const field of ['start_plan', 'end_plan', 'start']) {
+          if (fields[field]) row[field] = iso(fields[field]);
         }
+        // Production cleared the actual end on this route (task 2148038, 2026-10-26).
+        row.end = undefined;
       }
       res.end(JSON.stringify({ close: true, notice: 'Cập nhật thành công' }));
       return;
@@ -866,41 +868,55 @@ const applyDates = (s, more, extra = sess) => dates(s, ['--apply', '--confirm-ho
 test('set-dates --dry-run shows before and after and sends nothing', async () => {
   const s = await startServer();
   try {
-    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    seed(s, { start: '2026-10-19 00:00:00' });
     const r = await dates(s, ['--dry-run', '--project-id', '3869', '--ids', '5000', '--actual-from-plan']);
     assert.equal(r.code, 0, r.err);
     const [row] = JSON.parse(r.out);
     assert.equal(row.result, 'would update');
-    assert.deepEqual(row.before, { startPlan: '2026-10-06', endPlan: '2026-10-09', start: '2026-10-19', end: '2026-10-19' });
-    assert.deepEqual(row.after, { startPlan: '2026-10-06', endPlan: '2026-10-09', start: '2026-10-06', end: '2026-10-09' });
+    assert.deepEqual(row.before, { startPlan: '2026-10-06', endPlan: '2026-10-09', start: '2026-10-19', end: null });
+    assert.deepEqual(row.after, { startPlan: '2026-10-06', endPlan: '2026-10-09', start: '2026-10-06', end: null });
     assert.equal(s.realtimes.length, 0);
   } finally { s.server.close(); }
 });
 
-test('set-dates --apply sends every date together, then confirms by read-back', async () => {
+test('set-dates --apply sends the plan dates with the actual start, never an end, then confirms by read-back', async () => {
   const s = await startServer();
   try {
-    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    seed(s, { start: '2026-10-19 00:00:00' });
     const r = await applyDates(s, ['--ids', '5000', '--actual-from-plan']);
     assert.equal(r.code, 0, r.err);
     assert.equal(JSON.parse(r.out)[0].result, 'updated');
     assert.deepEqual(s.realtimes, [{
-      ID: '5000', start_plan: '06/10/2026', end_plan: '09/10/2026', start: '06/10/2026', end: '09/10/2026', inlineLogin: '1',
+      ID: '5000', start_plan: '06/10/2026', end_plan: '09/10/2026', start: '06/10/2026', inlineLogin: '1',
     }]);
     assert.equal(s.tasks[0].start.slice(0, 10), '2026-10-06');
     assert.equal((r.out + r.err).includes('sess=1'), false);
   } finally { s.server.close(); }
 });
 
-test('explicit --start and --end change only those, keeping the plan dates', async () => {
+test('explicit --start changes only the actual start, keeping the plan dates', async () => {
   const s = await startServer();
   try {
-    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
-    const r = await applyDates(s, ['--ids', '5000', '--start', '2026-10-07', '--end', '2026-10-08']);
+    seed(s, { start: '2026-10-19 00:00:00' });
+    const r = await applyDates(s, ['--ids', '5000', '--start', '2026-10-07']);
     assert.equal(r.code, 0, r.err);
     assert.equal(s.realtimes[0].start_plan, '06/10/2026');
     assert.equal(s.realtimes[0].start, '07/10/2026');
-    assert.equal(s.realtimes[0].end, '08/10/2026');
+    assert.equal('end' in s.realtimes[0], false);
+  } finally { s.server.close(); }
+});
+
+test('set-dates refuses a task whose actual end is set, before any call', async () => {
+  const s = await startServer();
+  try {
+    seed(s, { start: '2026-10-26 00:00:00', end: '2026-10-26 00:00:00' });
+    const r = await applyDates(s, ['--ids', '5000', '--actual-from-plan']);
+    assert.equal(r.code, 2);
+    const [row] = JSON.parse(r.out);
+    assert.equal(row.result, 'refused');
+    assert.match(row.reason, /would clear it/);
+    assert.equal(s.realtimes.length, 0);
+    assert.equal(s.tasks[0].end, '2026-10-26 00:00:00');
   } finally { s.server.close(); }
 });
 
@@ -918,7 +934,7 @@ test('set-dates makes no call for a task whose dates already match', async () =>
 test('a server that ignores the update is reported as mismatch with exit 1', async () => {
   const s = await startServer();
   try {
-    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    seed(s, { start: '2026-10-19 00:00:00' });
     s.flags.ignoreRealtime = true;
     const r = await applyDates(s, ['--ids', '5000', '--actual-from-plan']);
     assert.equal(r.code, 1);
@@ -931,7 +947,7 @@ test('a server that ignores the update is reported as mismatch with exit 1', asy
 test('set-dates --apply needs a session and the usual host gate', async () => {
   const s = await startServer();
   try {
-    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    seed(s, { start: '2026-10-19 00:00:00' });
     const noSession = await applyDates(s, ['--ids', '5000', '--actual-from-plan'], { EOFFICE_SESSION_COOKIE: '' });
     assert.equal(noSession.code, 2);
     assert.match(noSession.err, /session/);
@@ -946,8 +962,8 @@ test('set-dates --apply needs a session and the usual host gate', async () => {
 test('a rejected session is reported per task and stops the run', async () => {
   const s = await startServer();
   try {
-    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
-    seed(s, { ID: 5001, start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    seed(s, { start: '2026-10-19 00:00:00' });
+    seed(s, { ID: 5001, start: '2026-10-19 00:00:00' });
     const r = await applyDates(s, ['--ids', '5000,5001', '--actual-from-plan'], { EOFFICE_SESSION_COOKIE: 'sess=wrong' });
     assert.equal(r.code, 1);
     const rows = JSON.parse(r.out);
@@ -975,7 +991,7 @@ test('set-dates rejects bad options with exit 2', async () => {
   try {
     seed(s);
     const base = ['--dry-run', '--project-id', '3869', '--ids', '5000'];
-    for (const extra of [[], ['--actual-from-plan', '--start', '2026-10-01'], ['--start', '01/10/2026'], ['--end', '2026-13-40']]) {
+    for (const extra of [[], ['--actual-from-plan', '--start', '2026-10-01'], ['--start', '01/10/2026'], ['--end', '2026-10-08'], ['--start-plan', '2026-13-40']]) {
       const r = await dates(s, [...base, ...extra]);
       assert.equal(r.code, 2, extra.join(' '));
     }
@@ -1283,7 +1299,7 @@ test('with a token, get keeps using the API even when a session is present', asy
 test('set-dates without a token reads, writes and confirms through the session only', async () => {
   const s = await startServer();
   try {
-    seed(s, { start: '2026-10-19 00:00:00', end: '2026-10-19 00:00:00' });
+    seed(s, { start: '2026-10-19 00:00:00' });
     const dry = await run(['set-dates', '--dry-run', '--project-id', '3869', '--ids', '5000', '--actual-from-plan'], readOnlySession(s));
     assert.equal(dry.code, 0, dry.err);
     assert.equal(JSON.parse(dry.out)[0].result, 'would update');

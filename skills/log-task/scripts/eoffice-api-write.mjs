@@ -20,7 +20,7 @@ const USAGE = `Usage:
   eoffice-api-write.mjs delete --apply --confirm-host <host> [--allow-production] [--allow-foreign] --project-id <rawId> --ids <id>[,<id>...]
   eoffice-api-write.mjs report --dry-run --project-id <rawId> --items <items.json>
   eoffice-api-write.mjs report --apply --confirm-host <host> [--allow-production] [--session-from chrome|brave] --project-id <rawId> --items <items.json>
-  eoffice-api-write.mjs set-dates --dry-run --project-id <rawId> --ids <id>[,<id>...] (--actual-from-plan | [--start d] [--end d] [--start-plan d] [--end-plan d])
+  eoffice-api-write.mjs set-dates --dry-run --project-id <rawId> --ids <id>[,<id>...] (--actual-from-plan | [--start d] [--start-plan d] [--end-plan d])
   eoffice-api-write.mjs set-dates --apply --confirm-host <host> [--allow-production] [--session-from chrome|brave] --project-id <rawId> --ids ... (same date options)
   eoffice-api-write.mjs create --dry-run <batch.json>
   eoffice-api-write.mjs create --apply --confirm-host <host> [--allow-production] [--via api|session] [--no-report] [--session-from chrome|brave] <batch.json>`;
@@ -152,18 +152,21 @@ const isoDate = (value) => {
 };
 
 function dateTargets(args, current) {
+  if (args.includes('--end')) {
+    throw new UsageError('set-dates cannot set the actual end: the date route clears it instead (production, 2026-10-26); fix it in the UI');
+  }
   const given = {
-    start: flag(args, '--start'), end: flag(args, '--end'),
+    start: flag(args, '--start'),
     startPlan: flag(args, '--start-plan'), endPlan: flag(args, '--end-plan'),
   };
   const fromPlan = args.includes('--actual-from-plan');
   const anyGiven = Object.values(given).some((value) => value !== undefined);
   if (fromPlan === anyGiven) {
-    throw new UsageError('set-dates needs --actual-from-plan or at least one of --start --end --start-plan --end-plan, not both');
+    throw new UsageError('set-dates needs --actual-from-plan or at least one of --start --start-plan --end-plan, not both');
   }
   for (const value of Object.values(given)) if (value !== undefined) toApiDate(value);
   const target = fromPlan
-    ? { ...current, start: current.startPlan, end: current.endPlan }
+    ? { ...current, start: current.startPlan }
     : { ...current, ...Object.fromEntries(Object.entries(given).filter(([, value]) => value !== undefined)) };
   return target;
 }
@@ -300,7 +303,12 @@ async function runSetDates(client, args, env) {
       };
       const after = dateTargets(args, before);
       const same = Object.keys(before).every((key) => before[key] === after[key]);
-      rows.push({ ...row, before, after, result: same ? 'unchanged' : (apply ? 'pending' : 'would update') });
+      if (!same && before.end) {
+        // Any update through the date route clears a set actual end (task 2148038, production, 2026-10-26).
+        rows.push({ ...row, before, after, result: 'refused', reason: 'the actual end is set and the date route would clear it; fix the dates in the UI' });
+      } else {
+        rows.push({ ...row, before, after, result: same ? 'unchanged' : (apply ? 'pending' : 'would update') });
+      }
     }
   }
   const blocked = rows.some((row) => row.result === 'absent' || row.result === 'refused');

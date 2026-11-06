@@ -32,7 +32,7 @@ Use a UAT host and a UAT token with write permission on `work-normal-normal`.
 - [ ] `create --apply` with display-name people: resolved or stopped with `people not resolved`, as UAT dictates.
 - [ ] `get --ids <id>` shows the task with a working `link`; `get --raw` shows numeric people IDs.
 - [ ] `delete --dry-run` then `--apply` removes the task; `get` then reports `found: false`.
-- [ ] `set-dates --apply --session-from brave --actual-from-plan` changes the actual start/end and the read-back confirms it (the `end` field name is unverified).
+- [ ] `set-dates --apply --session-from brave --actual-from-plan` on a DOING task without an actual end changes the actual start and the read-back confirms it (a set actual end is refused: on production the route cleared it, 2026-10-26).
 
 ## Production (eoffice.novagroup.vn)
 
